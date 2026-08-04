@@ -27,6 +27,7 @@ export async function createLoan(raw: LoanInput): Promise<ActionResult<{ id: str
       user_id: user.id,
       borrower_name: input.borrower_name,
       amount: input.amount,
+      direction: input.direction ?? 'lent_out',
       date_lent: input.date_lent,
       reason: input.reason ?? null,
       expected_return_date: input.expected_return_date ?? null,
@@ -131,24 +132,28 @@ export async function snoozeLoanReminder(
   return { success: true, data: undefined }
 }
 
-export async function getLoans(opts?: { includeRepaid?: boolean }) {
+export async function getLoans(opts?: { includeRepaid?: boolean; direction?: 'lent_out' | 'borrowed_in' }) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return []
 
-  const baseQuery = (supabase as any)
+  let query = (supabase as any)
     .from('loans')
     .select(`
-      id, borrower_name, amount, date_lent, reason,
+      id, borrower_name, amount, direction, date_lent, reason,
       expected_return_date, reminder_date, status, notes, created_at,
       loan_repayments (id, amount, repaid_date, notes)
     `)
     .eq('user_id', user.id)
     .order('created_at', { ascending: false })
 
-  const query = opts?.includeRepaid
-    ? baseQuery
-    : baseQuery.neq('status', 'repaid')
+  if (!opts?.includeRepaid) {
+    query = query.neq('status', 'repaid')
+  }
+
+  if (opts?.direction) {
+    query = query.eq('direction', opts.direction)
+  }
 
   const { data, error } = await query
   if (error) {
@@ -160,6 +165,7 @@ export async function getLoans(opts?: { includeRepaid?: boolean }) {
     id: string
     borrower_name: string
     amount: number
+    direction: 'lent_out' | 'borrowed_in'
     date_lent: string
     reason: string | null
     expected_return_date: string | null
@@ -180,7 +186,7 @@ export async function getLoanSummary() {
 
   const { data, error } = await (supabase as any)
     .from('loans')
-    .select('amount, status, reminder_date, loan_repayments(amount)')
+    .select('amount, direction, status, reminder_date, loan_repayments(amount)')
     .eq('user_id', user.id)
     .neq('status', 'repaid')
 
@@ -188,18 +194,26 @@ export async function getLoanSummary() {
 
   const loans = data as Array<{
     amount: number
+    direction: 'lent_out' | 'borrowed_in'
     status: string
     reminder_date: string | null
     loan_repayments: Array<{ amount: number }>
   }>
 
-  let totalOutstanding = 0
+  let lentOutTotal = 0
+  let borrowedInTotal = 0
   let overdueCount = 0
   let nextReminder: string | null = null
 
   for (const loan of loans) {
     const repaid = loan.loan_repayments?.reduce((s, r) => s + r.amount, 0) ?? 0
-    totalOutstanding += loan.amount - repaid
+    const outstanding = loan.amount - repaid
+
+    if (loan.direction === 'borrowed_in') {
+      borrowedInTotal += outstanding
+    } else {
+      lentOutTotal += outstanding
+    }
 
     if (loan.reminder_date && loan.reminder_date <= today) overdueCount++
 
@@ -212,5 +226,12 @@ export async function getLoanSummary() {
     }
   }
 
-  return { totalOutstanding, overdueCount, nextReminder, loanCount: loans.length }
+  return {
+    totalOutstanding: lentOutTotal,
+    lentOutTotal,
+    borrowedInTotal,
+    overdueCount,
+    nextReminder,
+    loanCount: loans.length,
+  }
 }

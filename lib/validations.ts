@@ -31,6 +31,7 @@ export const categorySchema = z.object({
     .nonnegative('Budget must be non-negative')
     .max(10_000_000),
   group_id: z.string().uuid().nullable().optional(),
+  parent_id: z.string().uuid().nullable().optional(),
   is_flexible: z.boolean().optional().default(false),
   icon: z.string().max(10).optional().default('💰'),
 })
@@ -73,13 +74,14 @@ export type StackReallocationInput = z.infer<typeof stackReallocationSchema>
 export const loanSchema = z.object({
   borrower_name: z
     .string()
-    .min(1, 'Borrower name required')
+    .min(1, 'Name required')
     .max(200, 'Name too long')
     .transform(v => v.trim()),
   amount: z
     .number()
     .positive('Amount must be positive')
     .max(10_000_000),
+  direction: z.enum(['lent_out', 'borrowed_in']).default('lent_out'),
   date_lent: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   reason: z.string().max(500).optional().transform(v => v?.trim()),
   expected_return_date: z

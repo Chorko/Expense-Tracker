@@ -60,6 +60,7 @@ export default async function DashboardPage() {
       id: p.categories!.id,
       name: p.categories!.name,
       icon: p.categories!.icon,
+      parent_id: p.categories!.parent_id,
     }))
 
   // Current periods for reallocation modal

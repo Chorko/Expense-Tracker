@@ -11,6 +11,8 @@ import { AddTransactionModal } from '@/components/transactions/AddTransactionMod
 import { MoveFromStacksModal } from '@/components/stacks/MoveFromStacksModal'
 import { formatCurrency, formatDate } from '@/lib/utils/format'
 
+import { CategoryManageModal } from '@/components/categories/CategoryManageModal'
+
 // Period type matching getDashboardData return
 type Period = {
   id: string
@@ -26,6 +28,7 @@ type Period = {
     icon: string | null
     monthly_budget_amount: number
     group_id: string | null
+    parent_id: string | null
     category_groups: { name: string; color_hex: string } | null
   } | null
   category_stacks: { current_balance: number } | null
@@ -57,7 +60,7 @@ interface DashboardClientProps {
   loanSummary: { totalOutstanding: number; overdueCount: number; nextReminder: string | null; loanCount: number } | null
   recentTxns: Transaction[]
   goals: Goal[]
-  categories: Array<{ id: string; name: string; icon: string | null }>
+  categories: Array<{ id: string; name: string; icon: string | null; parent_id?: string | null }>
   currentPeriods: Array<{ category_id: string; name: string; month: number; year: number }>
   stacksForModal: Array<{ category_id: string; name: string; icon: string | null; current_balance: number }>
   totalBudgeted: number
@@ -72,6 +75,7 @@ export function DashboardClient(props: DashboardClientProps) {
   const [addTxnCategoryId, setAddTxnCategoryId] = useState<string | undefined>()
   const [showMoveStacks, setShowMoveStacks] = useState(false)
   const [moveStacksCategoryId, setMoveStacksCategoryId] = useState<string | undefined>()
+  const [showManageCategories, setShowManageCategories] = useState(false)
 
   const handleSuccess = useCallback(() => {
     router.refresh()
@@ -103,6 +107,12 @@ export function DashboardClient(props: DashboardClientProps) {
           </p>
         </div>
         <div className="flex gap-2">
+          <button
+            onClick={() => setShowManageCategories(true)}
+            className="btn btn-ghost text-sm border border-white/10"
+          >
+            ⚙ Categories
+          </button>
           {props.stacksForModal.length > 0 && (
             <button
               id="btn-move-stacks"
@@ -282,6 +292,20 @@ export function DashboardClient(props: DashboardClientProps) {
           onClose={() => setShowMoveStacks(false)}
           onSuccess={handleSuccess}
           preselectedCategoryId={moveStacksCategoryId}
+        />
+      )}
+
+      {showManageCategories && (
+        <CategoryManageModal
+          categories={props.categories.map(c => ({
+            id: c.id,
+            name: c.name,
+            icon: c.icon,
+            parent_id: c.parent_id ?? null,
+            monthly_budget_amount: props.periods.find(p => p.categories?.id === c.id)?.categories?.monthly_budget_amount ?? 0,
+          }))}
+          onClose={() => setShowManageCategories(false)}
+          onSuccess={handleSuccess}
         />
       )}
     </div>

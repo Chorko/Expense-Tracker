@@ -27,6 +27,7 @@ export async function createCategory(raw: CategoryInput): Promise<ActionResult<{
       name: parsed.data.name,
       monthly_budget_amount: parsed.data.monthly_budget_amount,
       group_id: parsed.data.group_id ?? null,
+      parent_id: parsed.data.parent_id ?? null,
       is_flexible: parsed.data.is_flexible,
       icon: parsed.data.icon,
     })
@@ -89,7 +90,7 @@ export async function getCategories() {
   const { data, error } = await (supabase as any)
     .from('categories')
     .select(`
-      id, name, monthly_budget_amount, is_flexible, is_active, icon, group_id,
+      id, name, monthly_budget_amount, is_flexible, is_active, icon, group_id, parent_id,
       category_groups (id, name, color_hex, sort_order)
     `)
     .eq('user_id', user.id)
@@ -106,8 +107,26 @@ export async function getCategories() {
     is_active: boolean
     icon: string | null
     group_id: string | null
+    parent_id: string | null
     category_groups: { id: string; name: string; color_hex: string; sort_order: number } | null
   }>
+}
+
+export async function deleteCategory(categoryId: string): Promise<ActionResult> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: 'Not authenticated' }
+
+  const { error } = await (supabase as any)
+    .from('categories')
+    .update({ is_active: false })
+    .eq('id', categoryId)
+    .eq('user_id', user.id)
+
+  if (error) return { success: false, error: 'Failed to delete category' }
+
+  revalidatePath('/dashboard')
+  return { success: true, data: undefined }
 }
 
 export async function createCategoryGroup(
@@ -184,6 +203,7 @@ type DashboardPeriod = {
     icon: string | null
     monthly_budget_amount: number
     group_id: string | null
+    parent_id: string | null
     category_groups: { name: string; color_hex: string } | null
   } | null
   category_stacks: { current_balance: number } | null
@@ -212,7 +232,7 @@ export async function getDashboardData() {
       .select(`
         id, month, year, budgeted_amount, rollover_in, spent_amount, closed,
         categories (
-          id, name, icon, monthly_budget_amount, group_id,
+          id, name, icon, monthly_budget_amount, group_id, parent_id,
           category_groups (name, color_hex)
         ),
         category_stacks (current_balance)

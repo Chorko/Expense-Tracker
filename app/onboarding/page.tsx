@@ -5,14 +5,28 @@ import { useRouter } from 'next/navigation'
 import { updateProfile, createCategory } from '@/app/actions/categories'
 
 const DEFAULT_CATEGORIES = [
-  { name: 'Groceries', icon: '🛒', amount: 5000 },
-  { name: 'Transport', icon: '🚌', amount: 2000 },
-  { name: 'OPD / Medical', icon: '🏥', amount: 3000 },
-  { name: 'Shopping', icon: '🛍️', amount: 4000 },
+  { name: 'Rent', icon: '🏠', amount: 9500 },
+  { name: 'Food', icon: '🍽️', amount: 5000 },
+  { name: 'Grocery', icon: '🛒', amount: 500 },
+  { name: 'Subscriptions', icon: '📱', amount: 1500 },
+  { name: 'Chennai travel', icon: '🚌', amount: 2000 },
+  { name: 'Domestic travel', icon: '✈️', amount: 500 },
+  { name: 'Family support', icon: '👨‍👩‍👧', amount: 4000 },
+  { name: 'Church', icon: '⛪', amount: 1000 },
+  { name: "Parents' health insurance", icon: '🏥', amount: 3000 },
+  { name: 'Term insurance (yourself)', icon: '🛡️', amount: 300 },
+  { name: 'OPD / routine medical buffer', icon: '💊', amount: 350 },
+  { name: 'SIP — Nifty 50 (core)', icon: '📈', amount: 3520 },
+  { name: 'SIP — Nifty Next 50', icon: '📊', amount: 1280 },
+  { name: 'SIP — Nasdaq 100 FoF', icon: '🌐', amount: 1600 },
+  { name: 'Personal RD @ 7.25%', icon: '🏦', amount: 3450 },
+  { name: 'Growth — SIP/Bond (fund TBD)', icon: '🌱', amount: 250 },
+  { name: 'EF safety top-up (→ liquid fund)', icon: '🛟', amount: 500 },
   { name: 'Entertainment', icon: '🎬', amount: 2000 },
-  { name: 'Utilities', icon: '💡', amount: 2500 },
-  { name: 'Dining Out', icon: '🍽️', amount: 3000 },
-  { name: 'Savings Buffer', icon: '💰', amount: 5000 },
+  { name: 'Shopping', icon: '🛍️', amount: 1500 },
+  { name: 'Misc', icon: '📦', amount: 1000 },
+  { name: 'Annual one-off sinking fund (→ Oct RD)', icon: '🏺', amount: 1250 },
+  { name: 'Gifts sinking fund', icon: '🎁', amount: 1000 },
 ]
 
 type CategoryDraft = { name: string; icon: string; amount: number; enabled: boolean }
