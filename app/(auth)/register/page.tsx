@@ -41,35 +41,43 @@ export default function RegisterPage() {
     setErrors({})
 
     startTransition(async () => {
-      const { data, error } = await supabase.auth.signUp({
-        email: parsed.data.email,
-        password: parsed.data.password,
-        options: {
-          data: { display_name: parsed.data.display_name },
-        },
-      })
-
-      if (error) {
-        setServerError(error.message || 'Registration failed. Please try again.')
-        return
-      }
-
-      if (data.session) {
-        router.push('/onboarding')
-        router.refresh()
-      } else {
-        // Try direct sign in (in case email confirmation is disabled)
-        const loginRes = await supabase.auth.signInWithPassword({
+      try {
+        const { data, error } = await supabase.auth.signUp({
           email: parsed.data.email,
           password: parsed.data.password,
+          options: {
+            data: { display_name: parsed.data.display_name },
+          },
         })
 
-        if (loginRes.data.session) {
+        if (error) {
+          console.error('Supabase signUp error:', error)
+          setServerError(error.message || 'Registration failed. Check browser console.')
+          return
+        }
+
+        if (data.session) {
           router.push('/onboarding')
           router.refresh()
         } else {
-          setServerError('Account created! Please check your email to confirm your account, or disable "Confirm Email" in Supabase Auth settings.')
+          // Try direct sign in (in case email confirmation is disabled)
+          const loginRes = await supabase.auth.signInWithPassword({
+            email: parsed.data.email,
+            password: parsed.data.password,
+          })
+
+          if (loginRes.data?.session) {
+            router.push('/onboarding')
+            router.refresh()
+          } else if (data.user) {
+            setServerError('Account created! Please check your email to confirm your account, or log in.')
+          } else {
+            setServerError('Registration could not be completed. Please try again.')
+          }
         }
+      } catch (err) {
+        console.error('Registration exception:', err)
+        setServerError('An unexpected error occurred. Please try again.')
       }
     })
   }
