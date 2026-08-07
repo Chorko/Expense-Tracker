@@ -255,3 +255,89 @@ export async function getDashboardData() {
     year,
   }
 }
+
+const CUSTOM_PRESET_22 = [
+  { name: 'Rent', icon: '🏠', amount: 9500 },
+  { name: 'Food', icon: '🍽️', amount: 5000 },
+  { name: 'Grocery', icon: '🛒', amount: 500 },
+  { name: 'Subscriptions', icon: '📱', amount: 1500 },
+  { name: 'Chennai travel', icon: '🚌', amount: 2000 },
+  { name: 'Domestic travel', icon: '✈️', amount: 500 },
+  { name: 'Family support', icon: '👨‍👩‍👧', amount: 4000 },
+  { name: 'Church', icon: '⛪', amount: 1000 },
+  { name: "Parents' health insurance", icon: '🏥', amount: 3000 },
+  { name: 'Term insurance (yourself)', icon: '🛡️', amount: 300 },
+  { name: 'OPD / routine medical buffer', icon: '💊', amount: 350 },
+  { name: 'SIP — Nifty 50 (core)', icon: '📈', amount: 3520 },
+  { name: 'SIP — Nifty Next 50', icon: '📊', amount: 1280 },
+  { name: 'SIP — Nasdaq 100 FoF', icon: '🌐', amount: 1600 },
+  { name: 'Personal RD @ 7.25%', icon: '🏦', amount: 3450 },
+  { name: 'Growth — SIP/Bond (fund TBD)', icon: '🌱', amount: 250 },
+  { name: 'EF safety top-up (→ liquid fund)', icon: '🛟', amount: 500 },
+  { name: 'Entertainment', icon: '🎬', amount: 2000 },
+  { name: 'Shopping', icon: '🛍️', amount: 1500 },
+  { name: 'Misc', icon: '📦', amount: 1000 },
+  { name: 'Annual one-off sinking fund (→ Oct RD)', icon: '🏺', amount: 1250 },
+  { name: 'Gifts sinking fund', icon: '🎁', amount: 1000 },
+]
+
+export async function seedPresetCategories(): Promise<ActionResult> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: 'Not authenticated' }
+
+  const { month, year } = getCurrentMonthYear()
+
+  for (const item of CUSTOM_PRESET_22) {
+    const { data: existing } = await (supabase as any)
+      .from('categories')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('name', item.name)
+      .single()
+
+    let catId = existing?.id
+
+    if (!catId) {
+      const { data: newCat } = await (supabase as any)
+        .from('categories')
+        .insert({
+          user_id: user.id,
+          name: item.name,
+          monthly_budget_amount: item.amount,
+          icon: item.icon,
+          is_flexible: false,
+          is_active: true,
+        })
+        .select('id')
+        .single()
+      if (newCat) catId = newCat.id
+    } else {
+      await (supabase as any)
+        .from('categories')
+        .update({ monthly_budget_amount: item.amount, icon: item.icon, is_active: true })
+        .eq('id', catId)
+    }
+
+    if (catId) {
+      await (supabase as any).from('category_periods').upsert(
+        {
+          user_id: user.id,
+          category_id: catId,
+          month,
+          year,
+          budgeted_amount: item.amount,
+        },
+        { onConflict: 'user_id,category_id,month,year' }
+      )
+
+      await (supabase as any).from('category_stacks').upsert(
+        { user_id: user.id, category_id: catId, current_balance: 0 },
+        { onConflict: 'user_id,category_id' }
+      )
+    }
+  }
+
+  revalidatePath('/dashboard')
+  return { success: true, data: undefined }
+}
