@@ -28,14 +28,15 @@ interface LoansPageClientProps {
 export function LoansPageClient({ loans, today }: LoansPageClientProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
-  const [activeTab, setActiveTab] = useState<'all' | 'lent_out' | 'borrowed_in'>('all')
+  const [activeTab, setActiveTab] = useState<'lent_out' | 'borrowed_in'>('lent_out')
 
   const [showNewLoan, setShowNewLoan] = useState(false)
-  const [repayingLoanId, setRepayingLoanId] = useState<string | null>(null)
+  const [repayingLoan, setRepayingLoan] = useState<Loan | null>(null)
   const [snoozingLoanId, setSnoozingLoanId] = useState<string | null>(null)
+  const [expandedLoanId, setExpandedLoanId] = useState<string | null>(null)
   const [error, setError] = useState('')
 
-  // New loan form state
+  // New loan form
   const [newLoan, setNewLoan] = useState({
     borrower_name: '',
     amount: '',
@@ -51,24 +52,29 @@ export function LoansPageClient({ loans, today }: LoansPageClientProps) {
   const [repayment, setRepayment] = useState({ amount: '', repaid_date: today, notes: '' })
   const [snoozeDate, setSnoozeDate] = useState('')
 
+  // Separate loans by direction
   const lentOutLoans = loans.filter(l => (l.direction || 'lent_out') === 'lent_out')
   const borrowedInLoans = loans.filter(l => l.direction === 'borrowed_in')
 
-  const lentOutTotal = lentOutLoans.reduce((sum, loan) => {
-    const repaid = loan.loan_repayments?.reduce((s, r) => s + r.amount, 0) ?? 0
-    return sum + (loan.amount - repaid)
-  }, 0)
+  const lentOutOutstanding = lentOutLoans
+    .filter(l => l.status !== 'repaid')
+    .reduce((sum, l) => {
+      const repaid = l.loan_repayments?.reduce((s, r) => s + r.amount, 0) ?? 0
+      return sum + Math.max(0, l.amount - repaid)
+    }, 0)
 
-  const borrowedInTotal = borrowedInLoans.reduce((sum, loan) => {
-    const repaid = loan.loan_repayments?.reduce((s, r) => s + r.amount, 0) ?? 0
-    return sum + (loan.amount - repaid)
-  }, 0)
+  const borrowedInOutstanding = borrowedInLoans
+    .filter(l => l.status !== 'repaid')
+    .reduce((sum, l) => {
+      const repaid = l.loan_repayments?.reduce((s, r) => s + r.amount, 0) ?? 0
+      return sum + Math.max(0, l.amount - repaid)
+    }, 0)
 
-  const displayedLoans = activeTab === 'all'
-    ? loans
-    : activeTab === 'lent_out'
-    ? lentOutLoans
-    : borrowedInLoans
+  const overdueLoans = loans.filter(
+    l => l.reminder_date && l.reminder_date <= today && l.status !== 'repaid'
+  )
+
+  const displayedLoans = activeTab === 'lent_out' ? lentOutLoans : borrowedInLoans
 
   function handleNewLoanSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -92,21 +98,21 @@ export function LoansPageClient({ loans, today }: LoansPageClientProps) {
       if (!result.success) { setError(result.error); return }
 
       setShowNewLoan(false)
-      setNewLoan({ borrower_name: '', amount: '', direction: 'lent_out', date_lent: today, reason: '', expected_return_date: '', reminder_date: '', notes: '' })
+      setNewLoan({ borrower_name: '', amount: '', direction: activeTab, date_lent: today, reason: '', expected_return_date: '', reminder_date: '', notes: '' })
       router.refresh()
     })
   }
 
   function handleRepaymentSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!repayingLoanId) return
+    if (!repayingLoan) return
     const amount = parseFloat(repayment.amount)
     if (!repayment.amount || isNaN(amount) || amount <= 0) { setError('Valid repayment amount required'); return }
     setError('')
 
     startTransition(async () => {
       const result = await addLoanRepayment({
-        loan_id: repayingLoanId,
+        loan_id: repayingLoan.id,
         amount,
         repaid_date: repayment.repaid_date,
         notes: repayment.notes || undefined,
@@ -114,7 +120,7 @@ export function LoansPageClient({ loans, today }: LoansPageClientProps) {
 
       if (!result.success) { setError(result.error); return }
 
-      setRepayingLoanId(null)
+      setRepayingLoan(null)
       setRepayment({ amount: '', repaid_date: today, notes: '' })
       router.refresh()
     })
@@ -134,185 +140,280 @@ export function LoansPageClient({ loans, today }: LoansPageClientProps) {
     })
   }
 
-  const overdueLoans = loans.filter(
-    l => l.reminder_date && l.reminder_date <= today && l.status !== 'repaid'
-  )
+  function openNewLoan(direction: 'lent_out' | 'borrowed_in') {
+    setNewLoan(n => ({ ...n, direction, date_lent: today }))
+    setError('')
+    setShowNewLoan(true)
+  }
+
+  const isBorrowedTab = activeTab === 'borrowed_in'
 
   return (
     <div className="animate-fadeIn">
+
+      {/* Page Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-parchment">Loans &amp; Borrowings</h1>
-          <p className="text-parchment-dim text-sm mt-0.5">Track money lent out and money borrowed</p>
+          <h1 className="text-2xl font-bold text-parchment">Loans & Borrowings</h1>
+          <p className="text-parchment-dim text-sm mt-0.5">Track money lent out and money borrowed in</p>
         </div>
         <button
           id="btn-new-loan"
-          onClick={() => { setShowNewLoan(true); setError('') }}
+          onClick={() => openNewLoan(activeTab)}
           className="btn btn-primary"
         >
-          + Log Loan / Borrowing
+          + Log {isBorrowedTab ? 'Borrowing' : 'Loan'}
         </button>
       </div>
 
-      {/* Summary cards */}
+      {/* Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-        <div className="card">
-          <p className="text-xs text-parchment-faint uppercase tracking-widest mb-1">
-            🤝 Money Lent OUT (They Owe Me)
-          </p>
-          <p className="font-mono font-bold text-2xl text-brass">{formatCurrency(lentOutTotal)}</p>
-          <p className="text-[0.625rem] text-parchment-faint mt-1">{lentOutLoans.length} active entries</p>
+        {/* Money I Lent Out */}
+        <div
+          className="card cursor-pointer transition-all hover:border-brass/40"
+          onClick={() => setActiveTab('lent_out')}
+          style={{ borderColor: activeTab === 'lent_out' ? 'rgba(201,168,76,0.4)' : '', background: activeTab === 'lent_out' ? 'rgba(201,168,76,0.04)' : '' }}
+        >
+          <div className="flex items-start justify-between mb-2">
+            <p className="text-xs text-parchment-faint uppercase tracking-widest">🤝 I Lent Out</p>
+            <span className="text-[0.625rem] font-mono text-parchment-faint">{lentOutLoans.filter(l => l.status !== 'repaid').length} active</span>
+          </div>
+          <p className="font-mono font-bold text-2xl text-brass">{formatCurrency(lentOutOutstanding)}</p>
+          <p className="text-[0.625rem] text-parchment-faint mt-1">Others owe me this</p>
         </div>
 
-        <div className="card">
-          <p className="text-xs text-parchment-faint uppercase tracking-widest mb-1">
-            💳 Money Borrowed IN (I Owe Them)
-          </p>
-          <p className="font-mono font-bold text-2xl text-rust">{formatCurrency(borrowedInTotal)}</p>
-          <p className="text-[0.625rem] text-parchment-faint mt-1">{borrowedInLoans.length} active entries</p>
+        {/* Money I Borrowed */}
+        <div
+          className="card cursor-pointer transition-all hover:border-rust/40"
+          onClick={() => setActiveTab('borrowed_in')}
+          style={{ borderColor: activeTab === 'borrowed_in' ? 'rgba(239,68,68,0.35)' : '', background: activeTab === 'borrowed_in' ? 'rgba(239,68,68,0.04)' : '' }}
+        >
+          <div className="flex items-start justify-between mb-2">
+            <p className="text-xs text-parchment-faint uppercase tracking-widest">💳 I Borrowed</p>
+            <span className="text-[0.625rem] font-mono text-parchment-faint">{borrowedInLoans.filter(l => l.status !== 'repaid').length} active</span>
+          </div>
+          <p className="font-mono font-bold text-2xl text-rust">{formatCurrency(borrowedInOutstanding)}</p>
+          <p className="text-[0.625rem] text-parchment-faint mt-1">I owe this to others</p>
         </div>
 
-        <div className="card" style={{ borderColor: overdueLoans.length > 0 ? 'rgba(239,68,68,0.3)' : '' }}>
-          <p className="text-xs text-parchment-faint uppercase tracking-widest mb-1">Overdue Reminders</p>
-          <p className={`font-mono font-bold text-2xl ${overdueLoans.length > 0 ? 'text-danger' : 'text-parchment'}`}>
+        {/* Overdue */}
+        <div
+          className="card"
+          style={{ borderColor: overdueLoans.length > 0 ? 'rgba(239,68,68,0.3)' : '' }}
+        >
+          <div className="flex items-start justify-between mb-2">
+            <p className="text-xs text-parchment-faint uppercase tracking-widest">⚠ Overdue</p>
+            <span className="text-[0.625rem] font-mono text-parchment-faint">reminders</span>
+          </div>
+          <p className={`font-mono font-bold text-2xl ${overdueLoans.length > 0 ? 'text-danger' : 'text-parchment-dim'}`}>
             {overdueLoans.length}
           </p>
-          <p className="text-[0.625rem] text-parchment-faint mt-1">Pending payment nudges</p>
+          <p className="text-[0.625rem] text-parchment-faint mt-1">Need follow-up</p>
         </div>
       </div>
 
-      {/* Filter Tabs */}
-      <div className="flex gap-2 mb-4">
-        <button
-          type="button"
-          onClick={() => setActiveTab('all')}
-          className={`btn text-xs py-1.5 px-3 ${activeTab === 'all' ? 'btn-primary' : 'btn-ghost'}`}
-        >
-          All Entries ({loans.length})
-        </button>
+      {/* Tab Switcher */}
+      <div className="flex gap-2 mb-4 p-1 rounded-xl" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
         <button
           type="button"
           onClick={() => setActiveTab('lent_out')}
-          className={`btn text-xs py-1.5 px-3 ${activeTab === 'lent_out' ? 'btn-primary' : 'btn-ghost'}`}
+          className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all ${
+            activeTab === 'lent_out'
+              ? 'bg-brass/15 text-brass border border-brass/25'
+              : 'text-parchment-dim hover:text-parchment'
+          }`}
         >
           🤝 Money I Lent ({lentOutLoans.length})
         </button>
         <button
           type="button"
           onClick={() => setActiveTab('borrowed_in')}
-          className={`btn text-xs py-1.5 px-3 ${activeTab === 'borrowed_in' ? 'btn-primary' : 'btn-ghost'}`}
+          className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all ${
+            activeTab === 'borrowed_in'
+              ? 'bg-rust/15 text-rust border border-rust/25'
+              : 'text-parchment-dim hover:text-parchment'
+          }`}
         >
           💳 Money I Borrowed ({borrowedInLoans.length})
         </button>
       </div>
 
-      {/* Loans table */}
+      {/* Loan Cards */}
       {displayedLoans.length === 0 ? (
-        <div className="card text-center py-12" style={{ borderStyle: 'dashed' }}>
-          <span className="text-4xl mb-3 block">🤝</span>
-          <p className="text-parchment-dim mb-1">No loans found</p>
-          <p className="text-parchment-faint text-sm">Log money you&apos;ve lent out or borrowed to track repayments</p>
+        <div className="card text-center py-16" style={{ borderStyle: 'dashed' }}>
+          <span className="text-5xl mb-4 block">{isBorrowedTab ? '💳' : '🤝'}</span>
+          <p className="text-parchment-dim font-medium mb-1">
+            {isBorrowedTab ? 'No borrowings recorded' : 'No loans recorded'}
+          </p>
+          <p className="text-parchment-faint text-sm mb-5">
+            {isBorrowedTab
+              ? 'Track money you\'ve borrowed from others and set repayment reminders'
+              : 'Track money you\'ve lent out and get reminded when it\'s due back'}
+          </p>
+          <button
+            onClick={() => openNewLoan(activeTab)}
+            className="btn btn-primary mx-auto"
+          >
+            + Log {isBorrowedTab ? 'a Borrowing' : 'a Loan'}
+          </button>
         </div>
       ) : (
-        <div className="card">
-          <table className="table-ledger">
-            <thead>
-              <tr>
-                <th>Person / Reason</th>
-                <th>Direction</th>
-                <th>Original</th>
-                <th>Outstanding</th>
-                <th>Status</th>
-                <th>Reminder</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {displayedLoans.map(loan => {
-                const repaid = loan.loan_repayments.reduce((s, r) => s + r.amount, 0)
-                const outstanding = loan.amount - repaid
-                const isOverdue = loan.reminder_date && loan.reminder_date <= today
-                const isBorrowed = loan.direction === 'borrowed_in'
+        <div className="flex flex-col gap-3">
+          {displayedLoans.map(loan => {
+            const repaid = loan.loan_repayments?.reduce((s, r) => s + r.amount, 0) ?? 0
+            const outstanding = Math.max(0, loan.amount - repaid)
+            const repaidPercent = Math.min(100, (repaid / loan.amount) * 100)
+            const isOverdue = loan.reminder_date && loan.reminder_date <= today && loan.status !== 'repaid'
+            const isRepaid = loan.status === 'repaid'
+            const isExpanded = expandedLoanId === loan.id
+            const accentColor = isBorrowedTab ? 'var(--rust)' : 'var(--brass)'
+            const accentBg = isBorrowedTab ? 'rgba(239,68,68,0.08)' : 'rgba(201,168,76,0.08)'
 
-                return (
-                  <tr key={loan.id}>
-                    <td>
-                      <div>
-                        <p className="font-medium text-parchment">{loan.borrower_name}</p>
-                        {loan.reason && (
-                          <p className="text-xs text-parchment-faint">{loan.reason}</p>
-                        )}
-                        <p className="text-xs text-parchment-faint font-mono">
-                          Date: {formatDate(loan.date_lent)}
-                        </p>
-                      </div>
-                    </td>
-                    <td>
-                      <span
-                        className="badge text-xs"
-                        style={{
-                          background: isBorrowed ? 'rgba(239,68,68,0.1)' : 'rgba(201,168,76,0.1)',
-                          color: isBorrowed ? 'var(--rust)' : 'var(--brass)',
-                          border: isBorrowed ? '1px solid rgba(239,68,68,0.2)' : '1px solid rgba(201,168,76,0.2)',
-                        }}
-                      >
-                        {isBorrowed ? '💳 Borrowed IN' : '🤝 Lent OUT'}
-                      </span>
-                    </td>
-                    <td className="amount font-mono">{formatCurrency(loan.amount)}</td>
-                    <td>
-                      <span
-                        className="amount font-mono font-semibold"
-                        style={{ color: outstanding > 0 ? (isBorrowed ? 'var(--rust)' : 'var(--brass)') : 'var(--success)' }}
-                      >
-                        {formatCurrency(outstanding)}
-                      </span>
-                    </td>
-                    <td>
-                      <span className={`badge badge-${loan.status === 'partially_repaid' ? 'partial' : loan.status}`}>
-                        {loan.status.replace('_', ' ')}
-                      </span>
-                    </td>
-                    <td>
-                      {loan.reminder_date ? (
-                        <span
-                          className={`text-xs font-mono ${isOverdue ? 'text-danger font-semibold' : 'text-parchment-dim'}`}
-                        >
-                          {isOverdue ? '⚠ ' : ''}{formatRelativeDate(loan.reminder_date)}
+            return (
+              <div
+                key={loan.id}
+                className="card transition-all"
+                style={{
+                  borderColor: isOverdue ? 'rgba(239,68,68,0.3)' : isRepaid ? 'rgba(45,212,191,0.2)' : '',
+                  opacity: isRepaid ? 0.7 : 1,
+                }}
+              >
+                {/* Main Row */}
+                <div className="flex items-start gap-4">
+                  {/* Avatar circle */}
+                  <div
+                    className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 mt-0.5"
+                    style={{ background: accentBg, color: accentColor, border: `1px solid ${accentColor}30` }}
+                  >
+                    {loan.borrower_name.charAt(0).toUpperCase()}
+                  </div>
+
+                  {/* Info */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="font-semibold text-parchment">{loan.borrower_name}</p>
+                      {isOverdue && !isRepaid && (
+                        <span className="text-[0.625rem] bg-danger/10 text-danger border border-danger/20 rounded px-1.5 py-0.5 font-mono">
+                          OVERDUE
                         </span>
-                      ) : (
-                        <span className="text-parchment-faint text-xs">—</span>
                       )}
-                    </td>
-                    <td>
-                      <div className="flex gap-1 justify-end">
-                        <button
-                          onClick={() => { setRepayingLoanId(loan.id); setError('') }}
-                          className="btn btn-secondary text-xs py-0.5 px-2"
-                          aria-label={`Record repayment for ${loan.borrower_name}`}
-                        >
-                          Repayment
-                        </button>
-                        {loan.reminder_date && (
-                          <button
-                            onClick={() => {
-                              setSnoozingLoanId(loan.id)
-                              setSnoozeDate('')
-                              setError('')
-                            }}
-                            className="btn btn-ghost text-xs py-0.5 px-2"
-                            aria-label={`Snooze reminder for ${loan.borrower_name}`}
-                          >
-                            Snooze
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                      {isRepaid && (
+                        <span className="text-[0.625rem] bg-teal/10 text-teal border border-teal/20 rounded px-1.5 py-0.5 font-mono">
+                          REPAID
+                        </span>
+                      )}
+                      {loan.status === 'partially_repaid' && (
+                        <span className="text-[0.625rem] bg-brass/10 text-brass border border-brass/20 rounded px-1.5 py-0.5 font-mono">
+                          PARTIAL
+                        </span>
+                      )}
+                    </div>
+                    {loan.reason && (
+                      <p className="text-xs text-parchment-faint mt-0.5">{loan.reason}</p>
+                    )}
+                    <p className="text-[0.625rem] text-parchment-faint font-mono mt-1">
+                      {isBorrowedTab ? 'Borrowed' : 'Lent'} on {formatDate(loan.date_lent)}
+                      {loan.expected_return_date && ` · Due ${formatDate(loan.expected_return_date)}`}
+                    </p>
+                  </div>
+
+                  {/* Amount */}
+                  <div className="text-right flex-shrink-0">
+                    <p className="font-mono font-bold text-lg" style={{ color: isRepaid ? 'var(--success)' : accentColor }}>
+                      {formatCurrency(outstanding)}
+                    </p>
+                    {repaid > 0 && !isRepaid && (
+                      <p className="text-[0.625rem] text-parchment-faint font-mono">
+                        of {formatCurrency(loan.amount)}
+                      </p>
+                    )}
+                    {isRepaid && (
+                      <p className="text-[0.625rem] text-teal font-mono">fully settled</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Progress bar */}
+                {repaid > 0 && (
+                  <div className="mt-3 mb-1">
+                    <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{
+                          width: `${repaidPercent}%`,
+                          background: isRepaid ? 'var(--success)' : accentColor,
+                        }}
+                      />
+                    </div>
+                    <p className="text-[0.625rem] text-parchment-faint font-mono mt-0.5">
+                      {repaidPercent.toFixed(0)}% repaid ({formatCurrency(repaid)} of {formatCurrency(loan.amount)})
+                    </p>
+                  </div>
+                )}
+
+                {/* Reminder badge */}
+                {loan.reminder_date && !isRepaid && (
+                  <div className="mt-2">
+                    <span
+                      className={`text-[0.625rem] font-mono px-2 py-0.5 rounded ${
+                        isOverdue
+                          ? 'bg-danger/10 text-danger border border-danger/20'
+                          : 'bg-white/5 text-parchment-faint border border-white/10'
+                      }`}
+                    >
+                      {isOverdue ? '⚠ ' : '🔔 '} Reminder: {formatRelativeDate(loan.reminder_date)}
+                    </span>
+                  </div>
+                )}
+
+                {/* Action buttons */}
+                {!isRepaid && (
+                  <div className="flex gap-2 mt-3 pt-3 border-t border-white/5">
+                    <button
+                      onClick={() => { setRepayingLoan(loan); setRepayment({ amount: outstanding.toFixed(2), repaid_date: today, notes: '' }); setError('') }}
+                      className="btn btn-secondary text-xs py-1 flex-1"
+                    >
+                      {isBorrowedTab ? '💸 Record Payment' : '💰 Record Repayment'}
+                    </button>
+                    {loan.loan_repayments?.length > 0 && (
+                      <button
+                        onClick={() => setExpandedLoanId(isExpanded ? null : loan.id)}
+                        className="btn btn-ghost text-xs py-1 px-3"
+                      >
+                        📋 {isExpanded ? 'Hide' : `History (${loan.loan_repayments.length})`}
+                      </button>
+                    )}
+                    {loan.reminder_date && (
+                      <button
+                        onClick={() => { setSnoozingLoanId(loan.id); setSnoozeDate(''); setError('') }}
+                        className="btn btn-ghost text-xs py-1 px-3"
+                      >
+                        ⏰ Snooze
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* Repayment History */}
+                {isExpanded && loan.loan_repayments?.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-white/5 animate-fadeIn">
+                    <p className="text-xs text-parchment-faint uppercase tracking-widest mb-2">Repayment History</p>
+                    <div className="flex flex-col gap-1.5">
+                      {loan.loan_repayments.map(r => (
+                        <div key={r.id} className="flex items-center justify-between py-1.5 px-2.5 rounded-lg" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                          <div>
+                            <span className="text-xs text-parchment font-mono">{formatCurrency(r.amount)}</span>
+                            {r.notes && <span className="text-[0.625rem] text-parchment-faint ml-2">— {r.notes}</span>}
+                          </div>
+                          <span className="text-[0.625rem] text-parchment-faint font-mono">{formatDate(r.repaid_date)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
 
@@ -321,36 +422,38 @@ export function LoansPageClient({ loans, today }: LoansPageClientProps) {
         <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowNewLoan(false)}>
           <div className="modal">
             <div className="flex items-center justify-between mb-5">
-              <h2 className="text-lg font-semibold text-parchment">Log Loan or Borrowing</h2>
+              <h2 className="text-lg font-semibold text-parchment">
+                Log {newLoan.direction === 'borrowed_in' ? 'a Borrowing' : 'a Loan'}
+              </h2>
               <button onClick={() => setShowNewLoan(false)} className="btn btn-ghost p-1.5">✕</button>
             </div>
 
             <form onSubmit={handleNewLoanSubmit} id="new-loan-form">
-              {/* Direction selector */}
+              {/* Direction toggle */}
               <div className="mb-4">
                 <label className="input-label">Entry Type</label>
-                <div className="flex gap-2">
+                <div className="flex gap-2 p-1 rounded-xl" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
                   <button
                     type="button"
                     onClick={() => setNewLoan(n => ({ ...n, direction: 'lent_out' }))}
-                    className={`flex-1 p-2.5 rounded-lg border text-center transition-all text-xs ${
+                    className={`flex-1 py-2 px-3 rounded-lg text-xs font-medium transition-all ${
                       newLoan.direction === 'lent_out'
-                        ? 'bg-brass/10 border-brass text-brass font-semibold'
-                        : 'bg-ink-navy border-white/5 text-parchment-dim'
+                        ? 'bg-brass/15 text-brass border border-brass/30 font-semibold'
+                        : 'text-parchment-dim hover:text-parchment'
                     }`}
                   >
-                    🤝 Money I Lent (They owe me)
+                    🤝 I Lent (They owe me)
                   </button>
                   <button
                     type="button"
                     onClick={() => setNewLoan(n => ({ ...n, direction: 'borrowed_in' }))}
-                    className={`flex-1 p-2.5 rounded-lg border text-center transition-all text-xs ${
+                    className={`flex-1 py-2 px-3 rounded-lg text-xs font-medium transition-all ${
                       newLoan.direction === 'borrowed_in'
-                        ? 'bg-rust/10 border-rust text-rust font-semibold'
-                        : 'bg-ink-navy border-white/5 text-parchment-dim'
+                        ? 'bg-rust/15 text-rust border border-rust/30 font-semibold'
+                        : 'text-parchment-dim hover:text-parchment'
                     }`}
                   >
-                    💳 Money I Borrowed (I owe them)
+                    💳 I Borrowed (I owe them)
                   </button>
                 </div>
               </div>
@@ -358,7 +461,7 @@ export function LoansPageClient({ loans, today }: LoansPageClientProps) {
               <div className="grid grid-cols-2 gap-4 mb-4">
                 <div className="col-span-2">
                   <label htmlFor="loan-borrower" className="input-label">
-                    {newLoan.direction === 'borrowed_in' ? 'Lender Name / Person I Owe' : 'Borrower Name / Person Who Owes Me'}
+                    {newLoan.direction === 'borrowed_in' ? 'Lender Name (Person I Owe)' : 'Borrower Name (Person Who Owes Me)'}
                   </label>
                   <input
                     id="loan-borrower"
@@ -366,9 +469,10 @@ export function LoansPageClient({ loans, today }: LoansPageClientProps) {
                     value={newLoan.borrower_name}
                     onChange={e => setNewLoan(n => ({ ...n, borrower_name: e.target.value }))}
                     className="input"
-                    placeholder="Name of person or entity"
+                    placeholder={newLoan.direction === 'borrowed_in' ? 'e.g. Rahul, Bank, Father…' : 'e.g. Vikram, Friend…'}
                     maxLength={200}
                     required
+                    autoFocus
                   />
                 </div>
                 <div>
@@ -396,14 +500,16 @@ export function LoansPageClient({ loans, today }: LoansPageClientProps) {
                   />
                 </div>
                 <div className="col-span-2">
-                  <label htmlFor="loan-reason" className="input-label">Reason / Purpose <span className="text-parchment-faint text-[0.625rem] font-normal normal-case">(optional)</span></label>
+                  <label htmlFor="loan-reason" className="input-label">
+                    Reason / Purpose <span className="text-parchment-faint text-[0.625rem] font-normal normal-case">(optional)</span>
+                  </label>
                   <input
                     id="loan-reason"
                     type="text"
                     value={newLoan.reason}
                     onChange={e => setNewLoan(n => ({ ...n, reason: e.target.value }))}
                     className="input"
-                    placeholder="e.g. Travel emergency, house repair, etc."
+                    placeholder="e.g. Travel, medical, house repair…"
                     maxLength={500}
                   />
                 </div>
@@ -432,7 +538,7 @@ export function LoansPageClient({ loans, today }: LoansPageClientProps) {
                     className="input font-mono"
                     min={today}
                   />
-                  <p className="text-parchment-faint text-[0.625rem] mt-0.5">When to receive nudge email</p>
+                  <p className="text-parchment-faint text-[0.625rem] mt-0.5">When to send email nudge</p>
                 </div>
               </div>
 
@@ -444,8 +550,14 @@ export function LoansPageClient({ loans, today }: LoansPageClientProps) {
 
               <div className="flex gap-3">
                 <button type="button" onClick={() => setShowNewLoan(false)} className="btn btn-ghost flex-1">Cancel</button>
-                <button id="new-loan-submit" type="submit" className="btn btn-primary flex-2" style={{ flex: 2 }} disabled={isPending}>
-                  {isPending ? 'Saving…' : 'Save Entry'}
+                <button
+                  id="new-loan-submit"
+                  type="submit"
+                  className={`btn flex-2 ${newLoan.direction === 'borrowed_in' ? 'btn-danger' : 'btn-primary'}`}
+                  style={{ flex: 2 }}
+                  disabled={isPending}
+                >
+                  {isPending ? 'Saving…' : `Save ${newLoan.direction === 'borrowed_in' ? 'Borrowing' : 'Loan'}`}
                 </button>
               </div>
             </form>
@@ -454,31 +566,39 @@ export function LoansPageClient({ loans, today }: LoansPageClientProps) {
       )}
 
       {/* ─── Repayment Modal ─── */}
-      {repayingLoanId && (
-        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setRepayingLoanId(null)}>
-          <div className="modal" style={{ maxWidth: '400px' }}>
+      {repayingLoan && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setRepayingLoan(null)}>
+          <div className="modal" style={{ maxWidth: '420px' }}>
             <div className="flex items-center justify-between mb-5">
-              <h2 className="text-lg font-semibold text-parchment">Record Repayment</h2>
-              <button onClick={() => setRepayingLoanId(null)} className="btn btn-ghost p-1.5">✕</button>
+              <h2 className="text-lg font-semibold text-parchment">
+                {repayingLoan.direction === 'borrowed_in' ? 'Record My Payment' : 'Record Repayment'}
+              </h2>
+              <button onClick={() => setRepayingLoan(null)} className="btn btn-ghost p-1.5">✕</button>
             </div>
 
             {(() => {
-              const loan = loans.find(l => l.id === repayingLoanId)!
-              const repaid = loan.loan_repayments.reduce((s, r) => s + r.amount, 0)
-              const outstanding = loan.amount - repaid
+              const repaid = repayingLoan.loan_repayments?.reduce((s, r) => s + r.amount, 0) ?? 0
+              const outstanding = Math.max(0, repayingLoan.amount - repaid)
+              const isBorrowed = repayingLoan.direction === 'borrowed_in'
               return (
-                <div className="mb-4 p-3 rounded-lg" style={{ background: 'var(--ink-navy-3)' }}>
-                  <p className="text-sm text-parchment font-medium">{loan.borrower_name}</p>
-                  <p className="font-mono text-teal font-semibold">
-                    {formatCurrency(outstanding)} outstanding
-                  </p>
+                <div className="mb-4 p-3 rounded-xl flex items-center justify-between" style={{ background: isBorrowed ? 'rgba(239,68,68,0.08)' : 'rgba(201,168,76,0.08)', border: `1px solid ${isBorrowed ? 'rgba(239,68,68,0.2)' : 'rgba(201,168,76,0.2)'}` }}>
+                  <div>
+                    <p className="text-sm text-parchment font-semibold">{repayingLoan.borrower_name}</p>
+                    <p className="text-xs text-parchment-faint">{repayingLoan.reason || (isBorrowed ? 'Money I borrowed' : 'Money I lent out')}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-mono font-bold text-lg" style={{ color: isBorrowed ? 'var(--rust)' : 'var(--brass)' }}>
+                      {formatCurrency(outstanding)}
+                    </p>
+                    <p className="text-[0.625rem] text-parchment-faint">outstanding</p>
+                  </div>
                 </div>
               )
             })()}
 
             <form onSubmit={handleRepaymentSubmit} id="repayment-form">
               <div className="mb-4">
-                <label htmlFor="repay-amount" className="input-label">Amount Repaid (₹)</label>
+                <label htmlFor="repay-amount" className="input-label">Amount (₹)</label>
                 <input
                   id="repay-amount"
                   type="number"
@@ -503,6 +623,20 @@ export function LoansPageClient({ loans, today }: LoansPageClientProps) {
                   max={today}
                 />
               </div>
+              <div className="mb-4">
+                <label htmlFor="repay-notes" className="input-label">
+                  Notes <span className="text-parchment-faint text-[0.625rem] font-normal normal-case">(optional)</span>
+                </label>
+                <input
+                  id="repay-notes"
+                  type="text"
+                  value={repayment.notes}
+                  onChange={e => setRepayment(r => ({ ...r, notes: e.target.value }))}
+                  className="input"
+                  placeholder="e.g. UPI, cash, partial…"
+                  maxLength={300}
+                />
+              </div>
 
               {error && (
                 <div className="mb-4 p-3 rounded-lg bg-danger/10 border border-danger/20 text-danger text-sm">
@@ -511,9 +645,15 @@ export function LoansPageClient({ loans, today }: LoansPageClientProps) {
               )}
 
               <div className="flex gap-3">
-                <button type="button" onClick={() => setRepayingLoanId(null)} className="btn btn-ghost flex-1">Cancel</button>
-                <button id="repay-submit" type="submit" className="btn btn-teal flex-2" style={{ flex: 2 }} disabled={isPending}>
-                  {isPending ? 'Saving…' : 'Record Repayment'}
+                <button type="button" onClick={() => setRepayingLoan(null)} className="btn btn-ghost flex-1">Cancel</button>
+                <button
+                  id="repay-submit"
+                  type="submit"
+                  className="btn btn-teal flex-2"
+                  style={{ flex: 2 }}
+                  disabled={isPending}
+                >
+                  {isPending ? 'Saving…' : '✓ Confirm Payment'}
                 </button>
               </div>
             </form>
@@ -553,8 +693,14 @@ export function LoansPageClient({ loans, today }: LoansPageClientProps) {
 
               <div className="flex gap-3">
                 <button type="button" onClick={() => setSnoozingLoanId(null)} className="btn btn-ghost flex-1">Cancel</button>
-                <button id="snooze-submit" type="submit" className="btn btn-secondary flex-2" style={{ flex: 2 }} disabled={isPending || !snoozeDate}>
-                  {isPending ? 'Saving…' : 'Snooze'}
+                <button
+                  id="snooze-submit"
+                  type="submit"
+                  className="btn btn-secondary flex-2"
+                  style={{ flex: 2 }}
+                  disabled={isPending || !snoozeDate}
+                >
+                  {isPending ? 'Saving…' : '⏰ Snooze'}
                 </button>
               </div>
             </form>

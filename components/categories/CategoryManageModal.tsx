@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useTransition } from 'react'
-import { createCategory, updateCategory, deleteCategory, seedPresetCategories } from '@/app/actions/categories'
+import { createCategory, updateCategory, deleteCategory } from '@/app/actions/categories'
 import { formatCurrency } from '@/lib/utils/format'
 
 interface Category {
@@ -27,14 +27,6 @@ export function CategoryManageModal({
   const [error, setError] = useState('')
   const [mode, setMode] = useState<'list' | 'create'>('list')
 
-  function handleSeedPreset() {
-    setError('')
-    startTransition(async () => {
-      const res = await seedPresetCategories()
-      if (!res.success) { setError(res.error); return }
-      onSuccess()
-    })
-  }
 
   // Create form state
   const [name, setName] = useState('')
@@ -132,15 +124,6 @@ export function CategoryManageModal({
             className={`btn text-xs flex-1 ${mode === 'create' ? 'btn-primary' : 'btn-ghost'}`}
           >
             + Add New / Sub-Category
-          </button>
-          <button
-            type="button"
-            onClick={handleSeedPreset}
-            disabled={isPending}
-            className="btn btn-secondary text-xs"
-            title="Instantly seed or restore your 22 categories totaling ₹45,000"
-          >
-            ⚡ Seed Preset (₹45k)
           </button>
         </div>
 
