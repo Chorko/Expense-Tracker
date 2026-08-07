@@ -11,6 +11,7 @@ import { AddTransactionModal } from '@/components/transactions/AddTransactionMod
 import { MoveFromStacksModal } from '@/components/stacks/MoveFromStacksModal'
 import { formatCurrency, formatDate } from '@/lib/utils/format'
 
+import { SpendingCalendar } from '@/components/dashboard/SpendingCalendar'
 import { CategoryManageModal } from '@/components/categories/CategoryManageModal'
 
 // Period type matching getDashboardData return
@@ -59,6 +60,7 @@ interface DashboardClientProps {
   stackChartData: Array<{ name: string; balance: number; icon: string | null; color: string }>
   loanSummary: { totalOutstanding: number; overdueCount: number; nextReminder: string | null; loanCount: number } | null
   recentTxns: Transaction[]
+  monthTxns?: Transaction[]
   goals: Goal[]
   categories: Array<{ id: string; name: string; icon: string | null; parent_id?: string | null }>
   currentPeriods: Array<{ category_id: string; name: string; month: number; year: number }>
@@ -66,6 +68,7 @@ interface DashboardClientProps {
   totalBudgeted: number
   totalSpent: number
   month: string
+  monthNum?: number
   year: number
 }
 
@@ -93,6 +96,7 @@ export function DashboardClient(props: DashboardClientProps) {
 
   const income = props.profile?.monthly_income ?? 0
   const totalStackBalance = props.stacksForModal.reduce((s, st) => s + st.current_balance, 0)
+  const monthNumber = props.monthNum ?? (new Date().getMonth() + 1)
 
   return (
     <div className="animate-fadeIn">
@@ -154,6 +158,16 @@ export function DashboardClient(props: DashboardClientProps) {
             onCategoryClick={() => openMoveStacks()}
           />
         </div>
+      </div>
+
+      {/* Daily Spending Calendar */}
+      <div className="mb-6">
+        <SpendingCalendar
+          month={monthNumber}
+          year={props.year}
+          transactions={props.monthTxns ?? props.recentTxns}
+          onAddTransactionOnDate={() => openAddTxn()}
+        />
       </div>
 
       {/* Category cards grid */}

@@ -7,11 +7,12 @@ import { DashboardClient } from './DashboardClient'
 import { MONTH_NAMES } from '@/lib/utils/format'
 
 export default async function DashboardPage() {
-  const [dashData, stacks, loanSummary, recentTxns] = await Promise.all([
+  const [dashData, stacks, loanSummary, recentTxns, monthTxns] = await Promise.all([
     getDashboardData(),
     getStackBalances(),
     getLoanSummary(),
     getTransactions({ limit: 8 }),
+    getTransactions({ month: new Date().getMonth() + 1, year: new Date().getFullYear() }),
   ])
 
   if (!dashData) {
@@ -92,6 +93,7 @@ export default async function DashboardPage() {
         stackChartData={stackChartData}
         loanSummary={loanSummary}
         recentTxns={recentTxns}
+        monthTxns={monthTxns}
         goals={goals}
         categories={categories}
         currentPeriods={currentPeriods}
@@ -99,6 +101,7 @@ export default async function DashboardPage() {
         totalBudgeted={totalBudgeted}
         totalSpent={totalSpent}
         month={MONTH_NAMES[month - 1]}
+        monthNum={month}
         year={year}
       />
     </Suspense>
