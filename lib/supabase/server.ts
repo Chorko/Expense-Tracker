@@ -1,28 +1,29 @@
+import 'server-only'
+
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import { getSupabaseEnv } from '@/lib/env'
 import type { Database } from '@/types/database'
 
 export async function createClient() {
   const cookieStore = await cookies()
+  const { url, key } = getSupabaseEnv()
 
-  return createServerClient<Database>(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll()
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            )
-          } catch {
-            // Server component — cookies can't be set from here; middleware handles refresh
-          }
-        },
+  return createServerClient<Database>(url, key, {
+    cookies: {
+      getAll() {
+        return cookieStore.getAll()
       },
-    }
-  )
+      setAll(cookiesToSet) {
+        try {
+          cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options))
+        } catch {
+          // Called from a Server Component: cookies are read-only there.
+          // The proxy refreshes the session on the next request.
+        }
+      },
+    },
+  })
 }
+
+export type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>

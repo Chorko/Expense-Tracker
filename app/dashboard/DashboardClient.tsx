@@ -1,325 +1,215 @@
 'use client'
 
-import { useState, useCallback } from 'react'
-import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { useState } from 'react'
+import { BudgetCard } from '@/components/dashboard/BudgetCard'
 import { HeroStats } from '@/components/dashboard/HeroStats'
-import { CategoryCard } from '@/components/dashboard/CategoryCard'
-import { DonutChart } from '@/components/dashboard/DonutChart'
-import { StackOverviewPanel } from '@/components/stacks/StackOverviewPanel'
-import { LoansWidget } from '@/components/dashboard/LoansWidget'
-import { AddTransactionModal } from '@/components/transactions/AddTransactionModal'
-import { MoveFromStacksModal } from '@/components/stacks/MoveFromStacksModal'
-import { formatCurrency, formatDate } from '@/lib/utils/format'
-
+import { SpendingDonut, TrendChart, type Slice, type TrendDatum } from '@/components/dashboard/Charts'
 import { SpendingCalendar } from '@/components/dashboard/SpendingCalendar'
-import { CategoryManageModal } from '@/components/categories/CategoryManageModal'
+import { GoalsWidget, LoansWidget, RecentTransactions, StacksWidget } from '@/components/dashboard/Widgets'
+import { MoveMoneyModal } from '@/components/stacks/MoveMoneyModal'
+import { TransactionModal } from '@/components/transactions/TransactionModal'
+import { EmptyState, PageHeader } from '@/components/ui/primitives'
+import type { MonthRef } from '@/lib/dates'
+import type {
+  BudgetLine,
+  CategoryMeta,
+  CategoryOption,
+  GoalOption,
+  GoalRow,
+  LoanSummary,
+  StackOption,
+  TxnRow,
+} from '@/lib/types'
 
-// Period type matching getDashboardData return
-type Period = {
-  id: string
-  month: number
-  year: number
-  budgeted_amount: number
-  rollover_in: number
-  spent_amount: number
-  closed: boolean
-  categories: {
-    id: string
-    name: string
-    icon: string | null
-    monthly_budget_amount: number
-    group_id: string | null
-    parent_id: string | null
-    category_groups: { name: string; color_hex: string } | null
-  } | null
-  category_stacks: { current_balance: number } | null
+export type DashboardProps = {
+  greeting: string
+  subtitle: string
+  monthSwitcher: React.ReactNode
+  month: MonthRef
+  today: string
+  isLiveMonth: boolean
+  defaultAddDate: string
+  lines: BudgetLine[]
+  stats: React.ComponentProps<typeof HeroStats>
+  donut: Slice[]
+  spentTotal: number
+  trend: TrendDatum[]
+  transactions: TxnRow[]
+  categoryMeta: Record<string, CategoryMeta>
+  categoryOptions: CategoryOption[]
+  stacks: StackOption[]
+  stackTotal: number
+  goals: GoalRow[]
+  goalOptions: GoalOption[]
+  loanSummary: LoanSummary
+  dailyBudget: number
 }
 
-type Goal = {
-  id: string
-  name: string
-  target_amount: number
-  current_amount: number
-  color_hex: string
-}
+type AddState = { categoryId?: string | null; date?: string }
 
-type Transaction = {
-  id: string
-  amount: number
-  description: string | null
-  txn_date: string
-  source: string
-  created_at: string
-  categories: { id: string; name: string; icon: string | null } | null
-}
-
-interface DashboardClientProps {
-  profile: { id: string; display_name: string | null; monthly_income: number; currency: string } | null
-  periods: Period[]
-  donutData: Array<{ name: string; value: number; color: string }>
-  stackChartData: Array<{ name: string; balance: number; icon: string | null; color: string }>
-  loanSummary: { totalOutstanding: number; overdueCount: number; nextReminder: string | null; loanCount: number } | null
-  recentTxns: Transaction[]
-  monthTxns?: Transaction[]
-  goals: Goal[]
-  categories: Array<{ id: string; name: string; icon: string | null; parent_id?: string | null }>
-  currentPeriods: Array<{ category_id: string; name: string; month: number; year: number }>
-  stacksForModal: Array<{ category_id: string; name: string; icon: string | null; current_balance: number }>
-  totalBudgeted: number
-  totalSpent: number
-  month: string
-  monthNum?: number
-  year: number
-}
-
-export function DashboardClient(props: DashboardClientProps) {
-  const router = useRouter()
-  const [showAddTxn, setShowAddTxn] = useState(false)
-  const [addTxnCategoryId, setAddTxnCategoryId] = useState<string | undefined>()
-  const [showMoveStacks, setShowMoveStacks] = useState(false)
-  const [moveStacksCategoryId, setMoveStacksCategoryId] = useState<string | undefined>()
-  const [showManageCategories, setShowManageCategories] = useState(false)
-
-  const handleSuccess = useCallback(() => {
-    router.refresh()
-  }, [router])
-
-  function openAddTxn(categoryId?: string) {
-    setAddTxnCategoryId(categoryId)
-    setShowAddTxn(true)
+/** Groups top-level budget lines by category group, keeping their order. */
+function groupLines(lines: BudgetLine[]) {
+  const sections = new Map<string, { name: string; color: string | null; lines: BudgetLine[] }>()
+  for (const line of lines) {
+    const key = line.group?.id ?? 'none'
+    const section = sections.get(key) ?? { name: line.group?.name ?? 'Other', color: line.group?.color ?? null, lines: [] }
+    section.lines.push(line)
+    sections.set(key, section)
   }
+  return [...sections.entries()]
+}
 
-  function openMoveStacks(categoryId?: string) {
-    setMoveStacksCategoryId(categoryId)
-    setShowMoveStacks(true)
-  }
-
-  const income = props.profile?.monthly_income ?? 0
-  const totalStackBalance = props.stacksForModal.reduce((s, st) => s + st.current_balance, 0)
-  const monthNumber = props.monthNum ?? (new Date().getMonth() + 1)
+export function DashboardClient(props: DashboardProps) {
+  const [adding, setAdding] = useState<AddState | null>(null)
+  const [editing, setEditing] = useState<TxnRow | null>(null)
+  const [moving, setMoving] = useState<{ sourceId?: string } | null>(null)
+  const sections = groupLines(props.lines)
+  const showSectionTitles = sections.length > 1
 
   return (
     <div className="animate-fadeIn">
-      {/* Page header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-parchment tracking-tight">
-            {props.month} {props.year}
-          </h1>
-          <p className="text-parchment-dim text-sm mt-0.5">
-            Welcome back{props.profile?.display_name ? `, ${props.profile.display_name}` : ''}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setShowManageCategories(true)}
-            className="btn btn-ghost text-sm border border-white/10"
-          >
-            ⚙ Categories
-          </button>
-          {props.stacksForModal.length > 0 && (
-            <button
-              id="btn-move-stacks"
-              onClick={() => openMoveStacks()}
-              className="btn btn-secondary text-sm"
-            >
-              ⊞ Move stacks
+      <PageHeader
+        title={props.greeting}
+        subtitle={props.subtitle}
+        actions={
+          <>
+            {props.monthSwitcher}
+            {props.stacks.length > 0 && (
+              <button type="button" className="btn btn-secondary" onClick={() => setMoving({})}>
+                Move money
+              </button>
+            )}
+            <button type="button" className="btn btn-primary" onClick={() => setAdding({ date: props.defaultAddDate })}>
+              + Add expense
             </button>
-          )}
-          <button
-            id="btn-add-transaction"
-            onClick={() => openAddTxn()}
-            className="btn btn-primary text-sm"
-          >
-            + Add transaction
-          </button>
-        </div>
-      </div>
-
-      {/* Hero stats */}
-      <HeroStats
-        income={income}
-        totalSpent={props.totalSpent}
-        totalBudgeted={props.totalBudgeted}
-        month={props.month}
-        year={props.year}
+          </>
+        }
       />
 
-      {/* Main content grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
-        <div className="card">
-          <h3 className="font-semibold text-parchment text-sm mb-1">Spending by Group</h3>
-          <p className="text-parchment-faint text-xs mb-3">This month&apos;s breakdown</p>
-          <DonutChart data={props.donutData} />
+      <HeroStats {...props.stats} />
+
+      <section aria-labelledby="budget-title" className="mb-6">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 id="budget-title" className="section-title">
+            Budget by category
+          </h2>
+          <Link href="/dashboard/settings#categories" className="text-xs font-medium text-brass hover:text-brass-light">
+            Edit categories →
+          </Link>
         </div>
-        <div className="lg:col-span-2">
-          <StackOverviewPanel
-            data={props.stackChartData}
-            onCategoryClick={() => openMoveStacks()}
+        {props.lines.length === 0 ? (
+          <EmptyState
+            icon="🗂️"
+            title={props.isLiveMonth ? 'No budget categories yet' : 'No budget for this month'}
+            description={
+              props.isLiveMonth
+                ? 'Create categories such as Rent or Groceries and give each a monthly amount.'
+                : 'This month was not budgeted in Ledger.'
+            }
+            action={
+              props.isLiveMonth && (
+                <Link href="/dashboard/settings#categories" className="btn btn-primary">
+                  Set up categories
+                </Link>
+              )
+            }
           />
-        </div>
+        ) : (
+          <div className="space-y-5">
+            {sections.map(([key, section]) => (
+              <div key={key}>
+                {showSectionTitles && (
+                  <h3 className="section-header mb-2 flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full" style={{ background: section.color ?? 'var(--slate)' }} aria-hidden="true" />
+                    {section.name}
+                  </h3>
+                )}
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                  {section.lines.map(line => (
+                    <BudgetCard
+                      key={line.categoryId}
+                      line={line}
+                      canAdd
+                      onAdd={categoryId => setAdding({ categoryId, date: props.defaultAddDate })}
+                      onMove={sourceId => setMoving({ sourceId })}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-5">
+        <section className="card lg:col-span-2" aria-labelledby="split-title">
+          <h2 id="split-title" className="section-title mb-3">
+            Where it went
+          </h2>
+          <SpendingDonut data={props.donut} total={props.spentTotal} />
+        </section>
+        <section className="card lg:col-span-3" aria-labelledby="trend-title">
+          <h2 id="trend-title" className="section-title mb-3">
+            Last 6 months
+          </h2>
+          <TrendChart data={props.trend} />
+        </section>
       </div>
 
-      {/* Daily Spending Calendar */}
       <div className="mb-6">
         <SpendingCalendar
-          month={monthNumber}
-          year={props.year}
-          transactions={props.monthTxns ?? props.recentTxns}
-          onAddTransactionOnDate={() => openAddTxn()}
+          month={props.month}
+          today={props.today}
+          transactions={props.transactions}
+          categoryMeta={props.categoryMeta}
+          dailyBudget={props.dailyBudget}
+          onAddOnDate={date => setAdding({ date })}
+          onEdit={setEditing}
         />
       </div>
 
-      {/* Category cards grid */}
-      <div className="mb-6">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="font-semibold text-parchment text-sm">Budget Categories</h2>
-          {totalStackBalance > 0 && (
-            <span className="text-xs font-mono text-teal">
-              Total in stacks: {formatCurrency(totalStackBalance)}
-            </span>
-          )}
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 stagger-children">
-          {props.periods.map((period, i) => (
-            <CategoryCard
-              key={period.categories?.id ?? i}
-              period={period}
-              onAddTransaction={id => openAddTxn(id)}
-              onMoveStack={id => openMoveStacks(id)}
-            />
-          ))}
-        </div>
-      </div>
-
-      {/* Bottom row */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Recent transactions */}
-        <div className="card lg:col-span-2">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-parchment text-sm">Recent Transactions</h3>
-            <button
-              onClick={() => router.push('/dashboard/transactions')}
-              className="text-xs text-brass hover:text-brass-light transition-colors"
-            >
-              View all →
-            </button>
-          </div>
-          {props.recentTxns.length === 0 ? (
-            <div className="text-center py-8">
-              <p className="text-parchment-dim text-sm mb-2">No transactions yet</p>
-              <button onClick={() => openAddTxn()} className="btn btn-secondary text-xs">
-                + Add your first transaction
-              </button>
-            </div>
-          ) : (
-            <table className="table-ledger">
-              <tbody>
-                {props.recentTxns.map(txn => (
-                  <tr key={txn.id}>
-                    <td className="py-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-base" aria-hidden="true">
-                          {txn.categories?.icon ?? '💳'}
-                        </span>
-                        <div>
-                          <p className="text-sm text-parchment">
-                            {txn.description || txn.categories?.name || 'Uncategorised'}
-                          </p>
-                          <p className="text-xs text-parchment-faint font-mono">
-                            {formatDate(txn.txn_date)}
-                          </p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="text-right amount-negative font-mono font-semibold text-sm">
-                      − {formatCurrency(txn.amount)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        {/* Right column */}
-        <div className="flex flex-col gap-4">
-          <LoansWidget
-            summary={props.loanSummary}
-            onViewAll={() => router.push('/dashboard/loans')}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <RecentTransactions
+            transactions={props.transactions.slice(0, 8)}
+            categoryMeta={props.categoryMeta}
+            today={props.today}
+            onEdit={setEditing}
+            onAdd={() => setAdding({ date: props.defaultAddDate })}
           />
-
-          {props.goals.length > 0 && (
-            <div className="card">
-              <h3 className="font-semibold text-parchment text-sm mb-3">Goals</h3>
-              <div className="flex flex-col gap-3">
-                {props.goals.slice(0, 3).map(goal => {
-                  const progress = Math.min(
-                    (goal.current_amount / goal.target_amount) * 100,
-                    100
-                  )
-                  return (
-                    <div key={goal.id}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs text-parchment truncate">{goal.name}</span>
-                        <span className="text-xs font-mono text-parchment-dim">
-                          {Math.round(progress)}%
-                        </span>
-                      </div>
-                      <div className="progress-bar">
-                        <div
-                          className="progress-bar-fill"
-                          style={{ width: `${progress}%`, background: goal.color_hex }}
-                        />
-                      </div>
-                      <div className="flex justify-between mt-0.5">
-                        <span className="text-[0.625rem] font-mono text-parchment-faint">
-                          {formatCurrency(goal.current_amount)}
-                        </span>
-                        <span className="text-[0.625rem] font-mono text-parchment-faint">
-                          {formatCurrency(goal.target_amount)}
-                        </span>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          )}
+        </div>
+        <div className="flex flex-col gap-4">
+          <StacksWidget stacks={props.stacks} total={props.stackTotal} onMove={() => setMoving({})} />
+          <LoansWidget summary={props.loanSummary} today={props.today} />
+          <GoalsWidget goals={props.goals} />
         </div>
       </div>
 
-      {/* Modals */}
-      {showAddTxn && (
-        <AddTransactionModal
-          categories={props.categories}
-          defaultCategoryId={addTxnCategoryId}
-          onClose={() => setShowAddTxn(false)}
-          onSuccess={handleSuccess}
+      {adding && (
+        <TransactionModal
+          categories={props.categoryOptions}
+          today={props.today}
+          defaultCategoryId={adding.categoryId}
+          defaultDate={adding.date}
+          onClose={() => setAdding(null)}
         />
       )}
-
-      {showMoveStacks && props.stacksForModal.length > 0 && (
-        <MoveFromStacksModal
-          stacks={props.stacksForModal}
-          currentPeriods={props.currentPeriods}
-          onClose={() => setShowMoveStacks(false)}
-          onSuccess={handleSuccess}
-          preselectedCategoryId={moveStacksCategoryId}
+      {editing && (
+        <TransactionModal
+          categories={props.categoryOptions}
+          today={props.today}
+          transaction={editing}
+          onClose={() => setEditing(null)}
         />
       )}
-
-      {showManageCategories && (
-        <CategoryManageModal
-          categories={props.categories.map(c => ({
-            id: c.id,
-            name: c.name,
-            icon: c.icon,
-            parent_id: c.parent_id ?? null,
-            monthly_budget_amount: props.periods.find(p => p.categories?.id === c.id)?.categories?.monthly_budget_amount ?? 0,
-          }))}
-          onClose={() => setShowManageCategories(false)}
-          onSuccess={handleSuccess}
+      {moving && (
+        <MoveMoneyModal
+          stacks={props.stacks}
+          categories={props.categoryOptions}
+          goals={props.goalOptions}
+          preselectedSourceId={moving.sourceId}
+          onClose={() => setMoving(null)}
         />
       )}
     </div>

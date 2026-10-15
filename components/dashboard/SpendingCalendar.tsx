@@ -1,178 +1,128 @@
 'use client'
 
 import { useState } from 'react'
-import { formatCurrency, formatDate } from '@/lib/utils/format'
+import { Modal } from '@/components/ui/Modal'
+import { formatDate, monthRange, toYmd, weekday, type MonthRef } from '@/lib/dates'
+import { formatCurrency, roundMoney } from '@/lib/format'
+import type { CategoryMeta, TxnRow } from '@/lib/types'
 
-interface TransactionItem {
-  id: string
-  amount: number
-  description: string | null
-  txn_date: string
-  categories?: { name: string; icon: string | null } | null
-}
-
-interface SpendingCalendarProps {
-  month: number // 1-12
-  year: number
-  transactions: TransactionItem[]
-  onAddTransactionOnDate?: (dateStr: string) => void
+type SpendingCalendarProps = {
+  month: MonthRef
+  today: string
+  transactions: TxnRow[]
+  categoryMeta: Record<string, CategoryMeta>
+  /** Average budget per day; colours are relative to it */
+  dailyBudget: number
+  onAddOnDate: (date: string) => void
+  onEdit: (txn: TxnRow) => void
 }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
+const LEVELS = {
+  none: { bg: 'var(--ink-navy)', border: 'rgba(255,255,255,0.05)', text: 'var(--parchment-faint)' },
+  light: { bg: 'rgba(45,212,191,0.10)', border: 'rgba(45,212,191,0.28)', text: 'var(--teal)' },
+  moderate: { bg: 'rgba(201,168,76,0.14)', border: 'rgba(201,168,76,0.34)', text: 'var(--brass)' },
+  high: { bg: 'rgba(248,113,113,0.13)', border: 'rgba(248,113,113,0.34)', text: 'var(--danger)' },
+}
+
 export function SpendingCalendar({
   month,
-  year,
+  today,
   transactions,
-  onAddTransactionOnDate,
+  categoryMeta,
+  dailyBudget,
+  onAddOnDate,
+  onEdit,
 }: SpendingCalendarProps) {
-  const [selectedDate, setSelectedDate] = useState<string | null>(null)
+  const [selected, setSelected] = useState<string | null>(null)
+  const { start, days } = monthRange(month)
+  const lead = weekday(start)
 
-  // Calculate calendar grid dates
-  const firstDayOfMonth = new Date(year, month - 1, 1)
-  const daysInMonth = new Date(year, month, 0).getDate()
-  const startWeekday = firstDayOfMonth.getDay() // 0 = Sun
-
-  const todayStr = new Date().toISOString().slice(0, 10)
-
-  // Map transactions by YYYY-MM-DD date string
-  const dailySpendMap: Record<string, { total: number; items: TransactionItem[] }> = {}
-
+  const byDay = new Map<string, { total: number; items: TxnRow[] }>()
   for (const txn of transactions) {
-    const d = txn.txn_date
-    if (!dailySpendMap[d]) {
-      dailySpendMap[d] = { total: 0, items: [] }
-    }
-    dailySpendMap[d].total += txn.amount
-    dailySpendMap[d].items.push(txn)
+    const entry = byDay.get(txn.txn_date) ?? { total: 0, items: [] }
+    entry.total = roundMoney(entry.total + txn.amount)
+    entry.items.push(txn)
+    byDay.set(txn.txn_date, entry)
+  }
+  const maxDay = Math.max(0, ...[...byDay.values()].map(d => d.total))
+  const reference = dailyBudget > 0 ? dailyBudget : maxDay
+
+  function level(total: number): keyof typeof LEVELS {
+    if (total <= 0 || reference <= 0) return 'none'
+    const ratio = total / reference
+    if (ratio < 0.6) return 'light'
+    if (ratio < 1.3) return 'moderate'
+    return 'high'
   }
 
-  // Generate grid cells
-  const calendarCells = []
-
-  // Empty leading padding cells
-  for (let i = 0; i < startWeekday; i++) {
-    calendarCells.push({ type: 'empty', id: `empty-${i}` })
-  }
-
-  // Day cells
-  for (let day = 1; day <= daysInMonth; day++) {
-    const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-    const spendData = dailySpendMap[dateStr] || { total: 0, items: [] }
-    const isToday = dateStr === todayStr
-
-    calendarCells.push({
-      type: 'day',
-      dayNumber: day,
-      dateStr,
-      totalSpent: spendData.total,
-      items: spendData.items,
-      isToday,
-    })
-  }
-
-  const selectedSpendData = selectedDate ? dailySpendMap[selectedDate] : null
+  const selectedDay = selected ? byDay.get(selected) : undefined
 
   return (
-    <div className="card">
-      <div className="flex items-center justify-between mb-4">
+    <section className="card" aria-labelledby="calendar-title">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="font-semibold text-parchment text-sm">Daily Spending Calendar</h3>
-          <p className="text-parchment-faint text-xs mt-0.5">
-            Click any date to view or add daily expenses
+          <h2 id="calendar-title" className="section-title">
+            Daily spending
+          </h2>
+          <p className="text-xs text-parchment-faint">
+            {dailyBudget > 0 ? `Colours compare each day with your ${formatCurrency(dailyBudget)} daily budget` : 'Tap a day to see or add expenses'}
           </p>
         </div>
-        <div className="flex items-center gap-3 text-xs">
-          <span className="flex items-center gap-1 text-parchment-faint">
-            <span className="w-2.5 h-2.5 rounded-sm bg-teal/20 border border-teal/40 inline-block" /> Light
-          </span>
-          <span className="flex items-center gap-1 text-parchment-faint">
-            <span className="w-2.5 h-2.5 rounded-sm bg-brass/30 border border-brass/50 inline-block" /> Moderate
-          </span>
-          <span className="flex items-center gap-1 text-parchment-faint">
-            <span className="w-2.5 h-2.5 rounded-sm bg-rust/30 border border-rust/50 inline-block" /> High
-          </span>
+        <div className="flex items-center gap-3 text-xs text-parchment-faint" aria-hidden="true">
+          {(['light', 'moderate', 'high'] as const).map(key => (
+            <span key={key} className="flex items-center gap-1 capitalize">
+              <span className="inline-block h-2.5 w-2.5 rounded-sm border" style={{ background: LEVELS[key].bg, borderColor: LEVELS[key].border }} />
+              {key === 'light' ? 'Under' : key === 'moderate' ? 'Around' : 'Over'}
+            </span>
+          ))}
         </div>
       </div>
 
-      {/* Weekday Headers */}
-      <div className="grid grid-cols-7 gap-1 text-center mb-1">
-        {WEEKDAYS.map(w => (
-          <div key={w} className="text-[0.625rem] font-mono uppercase tracking-widest text-parchment-faint py-1">
-            {w}
+      <div className="grid grid-cols-7 gap-1 text-center" aria-hidden="true">
+        {WEEKDAYS.map(day => (
+          <div key={day} className="py-1 font-mono text-[0.625rem] uppercase tracking-widest text-parchment-faint">
+            <span className="sm:hidden">{day[0]}</span>
+            <span className="hidden sm:inline">{day}</span>
           </div>
         ))}
       </div>
 
-      {/* Calendar Days Grid */}
       <div className="grid grid-cols-7 gap-1">
-        {calendarCells.map((cell) => {
-          if (cell.type === 'empty') {
-            return <div key={cell.id} className="h-16 rounded-lg bg-transparent" />
-          }
-
-          const dayNumber = cell.dayNumber!
-          const dateStr = cell.dateStr!
-          const totalSpent = cell.totalSpent ?? 0
-          const items = cell.items ?? []
-          const isToday = cell.isToday ?? false
-          const hasSpent = totalSpent > 0
-
-          // Intensity colors
-          let bgStyle = 'var(--ink-navy)'
-          let borderStyle = 'rgba(255,255,255,0.05)'
-          let textColor = 'var(--parchment-dim)'
-
-          if (hasSpent) {
-            if (totalSpent > 3000) {
-              bgStyle = 'rgba(239,68,68,0.15)'
-              borderStyle = 'rgba(239,68,68,0.35)'
-              textColor = 'var(--rust-light)'
-            } else if (totalSpent > 1000) {
-              bgStyle = 'rgba(201,168,76,0.15)'
-              borderStyle = 'rgba(201,168,76,0.35)'
-              textColor = 'var(--brass)'
-            } else {
-              bgStyle = 'rgba(45,212,191,0.12)'
-              borderStyle = 'rgba(45,212,191,0.3)'
-              textColor = 'var(--teal)'
-            }
-          }
-
+        {Array.from({ length: lead }, (_, i) => (
+          <div key={`lead-${i}`} aria-hidden="true" />
+        ))}
+        {Array.from({ length: days }, (_, i) => {
+          const date = toYmd(month.year, month.month, i + 1)
+          const entry = byDay.get(date)
+          const total = entry?.total ?? 0
+          const style = LEVELS[level(total)]
+          const isToday = date === today
+          const isFuture = date > today
+          const count = entry?.items.length ?? 0
           return (
             <button
-              key={dateStr}
+              key={date}
               type="button"
-              onClick={() => setSelectedDate(dateStr ?? null)}
-              className="h-16 p-1.5 rounded-lg border text-left flex flex-col justify-between transition-all hover:scale-[1.02] hover:border-brass/50 focus:outline-none relative group"
+              onClick={() => setSelected(date)}
+              className="flex h-14 flex-col justify-between rounded-lg border p-1 text-left transition-colors hover:border-brass/60 sm:h-16 sm:p-1.5"
               style={{
-                background: bgStyle,
-                borderColor: isToday ? 'var(--brass)' : borderStyle,
-                boxShadow: isToday ? '0 0 10px rgba(201,168,76,0.2)' : 'none',
+                background: style.bg,
+                borderColor: isToday ? 'var(--brass)' : style.border,
+                opacity: isFuture && total === 0 ? 0.45 : 1,
               }}
+              aria-label={`${formatDate(date)}: ${total > 0 ? `${formatCurrency(total)} in ${count} ${count === 1 ? 'expense' : 'expenses'}` : 'no spending'}`}
+              aria-current={isToday ? 'date' : undefined}
             >
-              <div className="flex items-center justify-between w-full">
-                <span
-                  className={`text-xs font-mono font-medium rounded-full px-1.5 py-0.2 ${
-                    isToday ? 'bg-brass text-ink-navy font-bold' : 'text-parchment-dim'
-                  }`}
-                >
-                  {dayNumber}
-                </span>
-                {items.length > 0 && (
-                  <span className="text-[0.625rem] text-parchment-faint font-mono">
-                    {items.length} {items.length === 1 ? 'txn' : 'txns'}
-                  </span>
-                )}
-              </div>
-
-              {hasSpent ? (
-                <span className="font-mono text-xs font-bold truncate w-full" style={{ color: textColor }}>
-                  ₹{totalSpent.toLocaleString('en-IN')}
-                </span>
-              ) : (
-                <span className="text-[0.625rem] text-parchment-faint opacity-0 group-hover:opacity-100 transition-opacity font-mono">
-                  ₹0
+              <span
+                className={`w-fit rounded-full px-1 font-mono text-[0.6875rem] ${isToday ? 'bg-brass font-bold text-ink-navy' : 'text-parchment-dim'}`}
+              >
+                {i + 1}
+              </span>
+              {total > 0 && (
+                <span className="truncate font-mono text-[0.625rem] font-semibold sm:text-xs" style={{ color: style.text }}>
+                  {formatCurrency(total, { compact: true, decimals: false })}
                 </span>
               )}
             </button>
@@ -180,73 +130,56 @@ export function SpendingCalendar({
         })}
       </div>
 
-      {/* Selected Date Detail Modal / Popover */}
-      {selectedDate && (
-        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setSelectedDate(null)}>
-          <div className="modal" style={{ maxWidth: '440px' }}>
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h3 className="font-semibold text-parchment text-base">
-                  {formatDate(selectedDate)}
-                </h3>
-                <p className="text-xs text-parchment-faint font-mono mt-0.5">
-                  Total Spent: <strong className="text-brass font-bold">{formatCurrency(selectedSpendData?.total ?? 0)}</strong>
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedDate(null)}
-                className="btn btn-ghost p-1.5 text-parchment-faint hover:text-parchment"
-              >
-                ✕
-              </button>
-            </div>
-
-            {selectedSpendData?.items && selectedSpendData.items.length > 0 ? (
-              <div className="flex flex-col divide-y divide-white/5 max-h-60 overflow-y-auto mb-4">
-                {selectedSpendData.items.map(txn => (
-                  <div key={txn.id} className="py-2.5 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="text-base">{txn.categories?.icon || '💳'}</span>
-                      <div>
-                        <p className="text-xs font-medium text-parchment">
-                          {txn.description || txn.categories?.name || 'Expense'}
-                        </p>
-                        {txn.description && txn.categories?.name && (
-                          <p className="text-[0.625rem] text-parchment-faint">{txn.categories.name}</p>
-                        )}
-                      </div>
-                    </div>
-                    <span className="font-mono text-sm font-semibold text-brass">
-                      − {formatCurrency(txn.amount)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="py-6 text-center text-parchment-faint text-xs mb-4">
-                No transactions recorded on this day.
-              </div>
-            )}
-
-            <div className="flex gap-2">
-              {onAddTransactionOnDate && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const d = selectedDate
-                    setSelectedDate(null)
-                    onAddTransactionOnDate(d)
-                  }}
-                  className="btn btn-primary w-full text-xs"
-                >
-                  + Add Expense on {formatDate(selectedDate)}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
+      {selected && (
+        <Modal
+          title={formatDate(selected)}
+          description={selectedDay ? `${formatCurrency(selectedDay.total)} spent` : 'Nothing recorded on this day'}
+          size="sm"
+          onClose={() => setSelected(null)}
+          footer={
+            <button
+              type="button"
+              className="btn btn-primary w-full"
+              onClick={() => {
+                const date = selected
+                setSelected(null)
+                onAddOnDate(date)
+              }}
+            >
+              + Add expense on this day
+            </button>
+          }
+        >
+          {selectedDay ? (
+            <ul className="divide-y divide-white/5">
+              {selectedDay.items.map(txn => {
+                const meta = txn.category_id ? categoryMeta[txn.category_id] : undefined
+                return (
+                  <li key={txn.id}>
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-3 py-2.5 text-left hover:bg-white/[0.02]"
+                      onClick={() => {
+                        setSelected(null)
+                        onEdit(txn)
+                      }}
+                    >
+                      <span aria-hidden="true">{meta?.icon ?? '💳'}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm text-parchment">{txn.description || meta?.name || 'Uncategorised'}</span>
+                        {txn.description && <span className="block truncate text-xs text-parchment-faint">{meta?.label ?? 'Uncategorised'}</span>}
+                      </span>
+                      <span className="font-mono text-sm text-parchment">{formatCurrency(txn.amount)}</span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          ) : (
+            <p className="py-4 text-center text-sm text-parchment-faint">No expenses on this day.</p>
+          )}
+        </Modal>
       )}
-    </div>
+    </section>
   )
 }

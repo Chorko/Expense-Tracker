@@ -1,237 +1,113 @@
 'use server'
 
-import { revalidatePath } from 'next/cache'
-import { createClient } from '@/lib/supabase/server'
-import { loanSchema, loanRepaymentSchema, snoozeLoanSchema } from '@/lib/validations'
-import type { LoanInput, LoanRepaymentInput } from '@/lib/validations'
+import { z } from 'zod'
+import { dbFail, done, fail, getActor, invalid, notSignedIn, ok, refreshDashboard } from '@/lib/actions'
+import {
+  loanReminderSchema,
+  loanRepaymentSchema,
+  loanSchema,
+  loanUpdateSchema,
+  type LoanInput,
+  type LoanRepaymentInput,
+  type LoanUpdateInput,
+} from '@/lib/validations'
+import type { ActionResult } from '@/lib/types'
 
-type ActionResult<T = void> =
-  | { success: true; data: T }
-  | { success: false; error: string }
+const idSchema = z.guid('Invalid id')
 
-export async function createLoan(raw: LoanInput): Promise<ActionResult<{ id: string }>> {
-  const parsed = loanSchema.safeParse(raw)
-  if (!parsed.success) {
-    return { success: false, error: parsed.error.issues[0]?.message ?? 'Validation error' }
-  }
+export async function createLoan(input: LoanInput): Promise<ActionResult<{ id: string }>> {
+  const parsed = loanSchema.safeParse(input)
+  if (!parsed.success) return invalid(parsed.error)
+  const actor = await getActor()
+  if (!actor) return notSignedIn()
 
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { success: false, error: 'Not authenticated' }
-
-  const input = parsed.data
-
-  const result = await (supabase as any)
+  const { data, error } = await actor.supabase
     .from('loans')
-    .insert({
-      user_id: user.id,
-      borrower_name: input.borrower_name,
-      amount: input.amount,
-      direction: input.direction ?? 'lent_out',
-      date_lent: input.date_lent,
-      reason: input.reason ?? null,
-      expected_return_date: input.expected_return_date ?? null,
-      reminder_date: input.reminder_date ?? input.expected_return_date ?? null,
-      notes: input.notes ?? null,
-    })
+    .insert({ ...parsed.data, user_id: actor.userId, status: 'outstanding' })
     .select('id')
     .single()
+  if (error) return dbFail('createLoan', error)
 
-  if (result.error) {
-    console.error('createLoan error:', result.error)
-    return { success: false, error: 'Failed to create loan record' }
-  }
-
-  revalidatePath('/dashboard')
-  revalidatePath('/dashboard/loans')
-  return { success: true, data: { id: (result.data as { id: string }).id } }
+  refreshDashboard()
+  return ok({ id: data.id })
 }
 
-export async function addLoanRepayment(raw: LoanRepaymentInput): Promise<ActionResult> {
-  const parsed = loanRepaymentSchema.safeParse(raw)
-  if (!parsed.success) {
-    return { success: false, error: parsed.error.issues[0]?.message ?? 'Validation error' }
-  }
+/** Status is derived from repayments by the database, so it is not editable. */
+export async function updateLoan(input: LoanUpdateInput): Promise<ActionResult> {
+  const parsed = loanUpdateSchema.safeParse(input)
+  if (!parsed.success) return invalid(parsed.error)
+  const actor = await getActor()
+  if (!actor) return notSignedIn()
 
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { success: false, error: 'Not authenticated' }
+  const { id, ...fields } = parsed.data
+  const { data, error } = await actor.supabase.from('loans').update(fields).eq('id', id).select('id')
+  if (error) return dbFail('updateLoan', error)
+  if (!data?.length) return fail('That entry no longer exists.')
 
-  // Verify the loan belongs to this user
-  const loanResult = await (supabase as any)
-    .from('loans')
-    .select('id, amount, status')
-    .eq('id', parsed.data.loan_id)
-    .eq('user_id', user.id)
-    .single()
+  refreshDashboard()
+  return done()
+}
 
-  const loan = loanResult.data as { id: string; amount: number; status: string } | null
-  if (!loan) return { success: false, error: 'Loan not found' }
-  if (loan.status === 'repaid') return { success: false, error: 'This loan is already fully repaid' }
+export async function deleteLoan(id: string): Promise<ActionResult> {
+  const parsed = idSchema.safeParse(id)
+  if (!parsed.success) return invalid(parsed.error)
+  const actor = await getActor()
+  if (!actor) return notSignedIn()
 
-  const repayResult = await (supabase as any)
+  const { data, error } = await actor.supabase.from('loans').delete().eq('id', parsed.data).select('id')
+  if (error) return dbFail('deleteLoan', error)
+  if (!data?.length) return fail('That entry no longer exists.')
+
+  refreshDashboard()
+  return done()
+}
+
+export async function addLoanRepayment(input: LoanRepaymentInput): Promise<ActionResult> {
+  const parsed = loanRepaymentSchema.safeParse(input)
+  if (!parsed.success) return invalid(parsed.error)
+  const actor = await getActor()
+  if (!actor) return notSignedIn()
+
+  // The database rejects repayments above the outstanding balance and
+  // updates the loan status.
+  const { error } = await actor.supabase
     .from('loan_repayments')
-    .select('amount')
-    .eq('loan_id', loan.id)
+    .insert({ ...parsed.data, user_id: actor.userId })
+  if (error) return dbFail('addLoanRepayment', error)
 
-  const existingRepayments = (repayResult.data ?? []) as Array<{ amount: number }>
-  const alreadyRepaid = existingRepayments.reduce((s, r) => s + r.amount, 0)
-  const outstanding = loan.amount - alreadyRepaid
-
-  if (parsed.data.amount > outstanding + 0.01) {
-    return {
-      success: false,
-      error: `Repayment (₹${parsed.data.amount}) exceeds outstanding balance (₹${outstanding.toFixed(2)})`,
-    }
-  }
-
-  const { error } = await (supabase as any)
-    .from('loan_repayments')
-    .insert({
-      loan_id: parsed.data.loan_id,
-      user_id: user.id,
-      amount: parsed.data.amount,
-      repaid_date: parsed.data.repaid_date,
-      notes: parsed.data.notes ?? null,
-    })
-
-  if (error) {
-    console.error('addLoanRepayment error:', error)
-    return { success: false, error: 'Failed to record repayment' }
-  }
-
-  revalidatePath('/dashboard')
-  revalidatePath('/dashboard/loans')
-  return { success: true, data: undefined }
+  refreshDashboard()
+  return done()
 }
 
-export async function snoozeLoanReminder(
-  loanId: string,
-  newReminderDate: string
-): Promise<ActionResult> {
-  const parsed = snoozeLoanSchema.safeParse({ loan_id: loanId, new_reminder_date: newReminderDate })
-  if (!parsed.success) {
-    return { success: false, error: parsed.error.issues[0]?.message ?? 'Validation error' }
-  }
+export async function deleteLoanRepayment(id: string): Promise<ActionResult> {
+  const parsed = idSchema.safeParse(id)
+  if (!parsed.success) return invalid(parsed.error)
+  const actor = await getActor()
+  if (!actor) return notSignedIn()
 
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { success: false, error: 'Not authenticated' }
+  const { data, error } = await actor.supabase.from('loan_repayments').delete().eq('id', parsed.data).select('id')
+  if (error) return dbFail('deleteLoanRepayment', error)
+  if (!data?.length) return fail('That repayment no longer exists.')
 
-  const { error } = await (supabase as any)
+  refreshDashboard()
+  return done()
+}
+
+/** Sets (or clears, with null) the e-mail reminder date. */
+export async function setLoanReminder(input: { loan_id: string; reminder_date: string | null }): Promise<ActionResult> {
+  const parsed = loanReminderSchema.safeParse(input)
+  if (!parsed.success) return invalid(parsed.error)
+  const actor = await getActor()
+  if (!actor) return notSignedIn()
+
+  const { data, error } = await actor.supabase
     .from('loans')
-    .update({ reminder_date: parsed.data.new_reminder_date })
+    .update({ reminder_date: parsed.data.reminder_date })
     .eq('id', parsed.data.loan_id)
-    .eq('user_id', user.id)
-    .neq('status', 'repaid')
+    .select('id')
+  if (error) return dbFail('setLoanReminder', error)
+  if (!data?.length) return fail('That entry no longer exists.')
 
-  if (error) return { success: false, error: 'Failed to snooze reminder' }
-
-  revalidatePath('/dashboard')
-  revalidatePath('/dashboard/loans')
-  return { success: true, data: undefined }
-}
-
-export async function getLoans(opts?: { includeRepaid?: boolean; direction?: 'lent_out' | 'borrowed_in' }) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return []
-
-  let query = (supabase as any)
-    .from('loans')
-    .select(`
-      id, borrower_name, amount, direction, date_lent, reason,
-      expected_return_date, reminder_date, status, notes, created_at,
-      loan_repayments (id, amount, repaid_date, notes)
-    `)
-    .eq('user_id', user.id)
-    .order('created_at', { ascending: false })
-
-  if (!opts?.includeRepaid) {
-    query = query.neq('status', 'repaid')
-  }
-
-  if (opts?.direction) {
-    query = query.eq('direction', opts.direction)
-  }
-
-  const { data, error } = await query
-  if (error) {
-    console.error('getLoans error:', error)
-    return []
-  }
-
-  return (data ?? []) as Array<{
-    id: string
-    borrower_name: string
-    amount: number
-    direction: 'lent_out' | 'borrowed_in'
-    date_lent: string
-    reason: string | null
-    expected_return_date: string | null
-    reminder_date: string | null
-    status: 'outstanding' | 'partially_repaid' | 'repaid'
-    notes: string | null
-    created_at: string
-    loan_repayments: Array<{ id: string; amount: number; repaid_date: string; notes: string | null }>
-  }>
-}
-
-export async function getLoanSummary() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
-
-  const today = new Date().toISOString().slice(0, 10)
-
-  const { data, error } = await (supabase as any)
-    .from('loans')
-    .select('amount, direction, status, reminder_date, loan_repayments(amount)')
-    .eq('user_id', user.id)
-    .neq('status', 'repaid')
-
-  if (error || !data) return null
-
-  const loans = data as Array<{
-    amount: number
-    direction: 'lent_out' | 'borrowed_in'
-    status: string
-    reminder_date: string | null
-    loan_repayments: Array<{ amount: number }>
-  }>
-
-  let lentOutTotal = 0
-  let borrowedInTotal = 0
-  let overdueCount = 0
-  let nextReminder: string | null = null
-
-  for (const loan of loans) {
-    const repaid = loan.loan_repayments?.reduce((s, r) => s + r.amount, 0) ?? 0
-    const outstanding = loan.amount - repaid
-
-    if (loan.direction === 'borrowed_in') {
-      borrowedInTotal += outstanding
-    } else {
-      lentOutTotal += outstanding
-    }
-
-    if (loan.reminder_date && loan.reminder_date <= today) overdueCount++
-
-    if (
-      loan.reminder_date &&
-      loan.reminder_date >= today &&
-      (!nextReminder || loan.reminder_date < nextReminder)
-    ) {
-      nextReminder = loan.reminder_date
-    }
-  }
-
-  return {
-    totalOutstanding: lentOutTotal,
-    lentOutTotal,
-    borrowedInTotal,
-    overdueCount,
-    nextReminder,
-    loanCount: loans.length,
-  }
+  refreshDashboard()
+  return done()
 }

@@ -1,129 +1,105 @@
-'use client'
+import { formatCurrency, pct } from '@/lib/format'
 
-import { useEffect, useRef, useState } from 'react'
-import { formatCurrency, pct } from '@/lib/utils/format'
-
-interface HeroStatsProps {
+type HeroStatsProps = {
   income: number
-  totalSpent: number
-  totalBudgeted: number
-  month: string
-  year: number
+  spent: number
+  uncategorised: number
+  budgeted: number
+  available: number
+  remaining: number
+  stackTotal: number
+  /** Days left in the month including today; null for past months */
+  daysLeft: number | null
 }
 
-function AnimatedNumber({ value, prefix = '' }: { value: number; prefix?: string }) {
-  const [displayed, setDisplayed] = useState(0)
-  const frameRef = useRef<number>(0)
-
-  useEffect(() => {
-    const start = 0
-    const end = value
-    const duration = 800
-    const startTime = performance.now()
-
-    function step(now: number) {
-      const elapsed = now - startTime
-      const progress = Math.min(elapsed / duration, 1)
-      // Ease-out cubic
-      const eased = 1 - Math.pow(1 - progress, 3)
-      setDisplayed(Math.round(start + (end - start) * eased))
-      if (progress < 1) {
-        frameRef.current = requestAnimationFrame(step)
-      }
-    }
-
-    frameRef.current = requestAnimationFrame(step)
-    return () => cancelAnimationFrame(frameRef.current)
-  }, [value])
-
+function Stat({
+  label,
+  value,
+  color,
+  children,
+}: {
+  label: string
+  value: string
+  color: string
+  children?: React.ReactNode
+}) {
   return (
-    <span className="mono-number">
-      {prefix}{displayed.toLocaleString('en-IN')}
-    </span>
+    <div className="card relative overflow-hidden">
+      <div
+        className="pointer-events-none absolute inset-0 opacity-[0.07]"
+        style={{ background: `radial-gradient(circle at top right, ${color}, transparent 70%)` }}
+        aria-hidden="true"
+      />
+      <p className="eyebrow">{label}</p>
+      <p className="mono-number mt-2 text-2xl font-bold sm:text-[1.7rem]" style={{ color }}>
+        {value}
+      </p>
+      {children && <div className="mt-1.5 space-y-0.5 text-xs text-parchment-dim">{children}</div>}
+    </div>
   )
 }
 
-export function HeroStats({ income, totalSpent, totalBudgeted, month, year }: HeroStatsProps) {
-  const remaining = totalBudgeted - totalSpent
-  const savingsRate = income > 0 ? Math.round(((income - totalSpent) / income) * 100) : 0
-  const spentPct = pct(totalSpent, totalBudgeted)
-
-  const stats = [
-    {
-      id: 'hero-income',
-      label: 'Monthly Income',
-      value: income,
-      color: 'var(--brass)',
-      icon: '₹',
-    },
-    {
-      id: 'hero-spent',
-      label: `Spent — ${month}`,
-      value: totalSpent,
-      color: spentPct > 90 ? 'var(--rust-light)' : spentPct > 70 ? 'var(--warning)' : 'var(--teal)',
-      icon: '↗',
-    },
-    {
-      id: 'hero-remaining',
-      label: 'Remaining Budget',
-      value: Math.max(0, remaining),
-      color: remaining < 0 ? 'var(--rust)' : 'var(--success)',
-      icon: '◎',
-    },
-    {
-      id: 'hero-savings',
-      label: 'Savings Rate',
-      value: savingsRate,
-      color: savingsRate > 20 ? 'var(--teal)' : savingsRate > 10 ? 'var(--warning)' : 'var(--rust)',
-      suffix: '%',
-      icon: '↑',
-      raw: true,
-    },
-  ]
+export function HeroStats(props: HeroStatsProps) {
+  const { income, spent, uncategorised, budgeted, available, remaining, stackTotal, daysLeft } = props
+  const usedPct = Math.round(pct(spent - uncategorised, available))
+  const unassigned = income - budgeted
+  const savingsRate = income > 0 ? Math.round(((income - spent) / income) * 100) : null
+  const perDay = daysLeft && remaining > 0 ? remaining / daysLeft : 0
 
   return (
-    <div className="stagger-children grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-      {stats.map(stat => (
-        <div
-          key={stat.id}
-          id={stat.id}
-          className="card relative overflow-hidden"
-        >
-          {/* Subtle glow accent */}
-          <div
-            className="absolute inset-0 opacity-5 pointer-events-none"
-            style={{
-              background: `radial-gradient(circle at top right, ${stat.color}, transparent 70%)`,
-            }}
-          />
-          <div className="relative">
-            <div className="flex items-center justify-between mb-3">
-              <span
-                className="text-xs font-mono font-medium uppercase tracking-widest"
-                style={{ color: 'var(--parchment-faint)' }}
-              >
-                {stat.label}
-              </span>
-              <span style={{ color: stat.color, opacity: 0.7, fontSize: '0.875rem' }}>
-                {stat.icon}
-              </span>
-            </div>
-            <div className="text-2xl md:text-3xl font-bold" style={{ color: stat.color }}>
-              {stat.raw ? (
-                <span className="mono-number">
-                  <AnimatedNumber value={stat.value} />
-                  {stat.suffix}
-                </span>
-              ) : (
+    <section aria-label="Month summary" className="stagger-children mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <Stat
+        label={remaining < 0 ? 'Over budget' : 'Left to spend'}
+        value={formatCurrency(Math.abs(remaining))}
+        color={remaining < 0 ? 'var(--danger)' : 'var(--success)'}
+      >
+        {daysLeft !== null ? (
+          remaining > 0 ? (
+            <p>
+              About <span className="font-mono text-parchment">{formatCurrency(perDay)}</span> a day for{' '}
+              {daysLeft} {daysLeft === 1 ? 'day' : 'days'}
+            </p>
+          ) : (
+            <p>Pull from a stack or trim spending to get back on track</p>
+          )
+        ) : (
+          <p>Unspent budget rolled into your stacks</p>
+        )}
+      </Stat>
+
+      <Stat
+        label="Spent"
+        value={formatCurrency(spent)}
+        color={usedPct >= 100 ? 'var(--danger)' : usedPct >= 85 ? 'var(--warning)' : 'var(--teal)'}
+      >
+        <p>
+          {usedPct}% of {formatCurrency(available)} budget
+        </p>
+        {uncategorised > 0 && <p className="text-warning">{formatCurrency(uncategorised)} uncategorised</p>}
+      </Stat>
+
+      <Stat label="Monthly income" value={formatCurrency(income)} color="var(--brass)">
+        {income > 0 ? (
+          <>
+            <p>
+              {unassigned >= 0 ? (
                 <>
-                  <span className="text-parchment-dim text-sm font-mono mr-0.5">₹</span>
-                  <AnimatedNumber value={stat.value} />
+                  <span className="font-mono text-parchment">{formatCurrency(unassigned)}</span> not assigned to a category
                 </>
+              ) : (
+                <span className="text-warning">Budget exceeds income by {formatCurrency(-unassigned)}</span>
               )}
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
+            </p>
+            {savingsRate !== null && <p>Savings rate {savingsRate}%</p>}
+          </>
+        ) : (
+          <p>Add your income in Settings to see your savings rate</p>
+        )}
+      </Stat>
+
+      <Stat label="In stacks" value={formatCurrency(stackTotal)} color="var(--teal)">
+        <p>Unspent budget saved from earlier months</p>
+      </Stat>
+    </section>
   )
 }
