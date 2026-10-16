@@ -1,40 +1,17 @@
-import { createClient } from '@supabase/supabase-js'
-
-const supabase = createClient(
-  Deno.env.get('SUPABASE_URL')!,
-  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-)
+// Legacy endpoint. Months now close inside Postgres via the per-user,
+// timezone-aware sync, so this just triggers a sync for every user. Kept so
+// old schedules keep working.
+// Deploy with: supabase functions deploy close-periods --no-verify-jwt
+import { jsonResponse, requireServiceKey } from '../_shared/supabase.ts'
 
 Deno.serve(async (req: Request) => {
-  try {
-    const now = new Date()
-    // Run for the previous month (this is called at end of month)
-    const month = now.getMonth() + 1 // 1-indexed
-    const year = now.getFullYear()
+  const supabase = requireServiceKey(req)
+  if (supabase instanceof Response) return supabase
 
-    const { error } = await supabase.rpc('close_periods_and_accrue_stacks', {
-      p_month: month,
-      p_year: year,
-    })
-
-    if (error) {
-      console.error('close_periods_and_accrue_stacks error:', error)
-      return new Response(JSON.stringify({ success: false, error: error.message }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }
-
-    console.log(`Periods closed and stacks accrued for ${month}/${year}`)
-    return new Response(JSON.stringify({ success: true, month, year }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    })
-  } catch (err) {
-    console.error('close-periods function error:', err)
-    return new Response(JSON.stringify({ success: false, error: String(err) }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' },
-    })
+  const { data, error } = await supabase.rpc('sync_all_periods')
+  if (error) {
+    console.error('sync_all_periods failed:', error.message)
+    return jsonResponse({ success: false, error: error.message }, 500)
   }
+  return jsonResponse({ success: true, users_synced: data ?? 0 })
 })

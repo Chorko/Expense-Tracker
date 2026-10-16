@@ -1,6 +1,6 @@
 # Ledger upgrade: plan, context and status
 
-Working branch: `upgrade/ledger-overhaul` · Last checkpoint: 15 Oct 2026 · **Progress: about 85%**
+Working branch: `upgrade/ledger-overhaul` · Last update: 16 Oct 2026 · **Progress: about 97%** (only the pass against a live Supabase project remains)
 
 This file is the hand-off for the end-to-end upgrade of Ledger (Next.js 16 + Supabase envelope-budget app).
 If a session is lost, read this first, then continue with [Remaining work](#remaining-work).
@@ -25,19 +25,19 @@ Commit and push at the end.
 | 8 | Stacks, Investments, Loans pages | Done |
 | 9 | New Goals and Settings pages | Done |
 | 10 | Auth + onboarding (forgot/reset password, callback, presets) | Done |
-| 11 | Edge functions rewrite (`supabase/functions/*`) | **To do** |
-| 12 | README, `.env.example`, final verification against a real project | **To do** |
-| 13 | Final commit, PR to `main`, final report | **To do** |
+| 11 | Edge functions rewrite (`supabase/functions/*`) | Done |
+| 12 | README, `.env.example`, lint/build verification | Done |
+| 13 | Final commit, PR to `main`, final report | In progress |
 
-Remaining ~15%: edge functions (~7%), README/env example (~3%), testing against a live Supabase project and
-fixing what it finds (~4%), PR and report (~1%).
+Remaining ~3%: a manual pass against the owner's live Supabase project (sign-up, e-mail links, every flow
+in a browser) once the `.env` exists, and the pull request.
 
 ### Verified at this checkpoint
 
-- `npx tsc --noEmit`: passes.
-- `npx eslint app components lib proxy.ts next.config.ts`: 0 problems. (`supabase/functions` still has the old
-  lint errors; that is task 11.)
-- `next build` (Next 16.4.1, Turbopack): passes, 18 routes, proxy registered.
+- `npm run typecheck` (`next typegen && tsc --noEmit`): passes.
+- `npm run lint`: 0 problems across the whole project.
+- Edge functions: `deno check` and `deno lint` pass on all six files (Deno 2.9.7).
+- `next build` (Next 16.4.1, Turbopack): passes, 18 routes, proxy registered, no warnings.
 - `next start` smoke test with placeholder env: auth pages return 200, protected routes redirect to
   `/login?next=…`, unknown routes 404, CSP / X-Frame-Options / HSTS headers present.
 - Database: `supabase/tests/migration-005/run.sh` runs migrations 001→005 on `supabase/postgres:17.11.0.004`
@@ -47,8 +47,8 @@ fixing what it finds (~4%), PR and report (~1%).
 ### Not verified yet
 
 - Nothing has run against the owner's real Supabase project (no `.env` yet): real sign-up/e-mail links,
-  PostgREST behaviour with real data, and every interactive flow in a browser still need a manual pass.
-- Edge functions are the old, untested versions.
+  PostgREST behaviour with real data, the Edge Function e-mails, and every interactive flow in a browser
+  still need a manual pass. This is the only remaining work.
 
 ## What the owner must do in Supabase
 
